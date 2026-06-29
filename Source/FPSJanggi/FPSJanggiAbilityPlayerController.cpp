@@ -6,6 +6,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "KKW/KKWProjectScriptsActor.h"
 #include "Kismet/GameplayStatics.h"
 
 namespace
@@ -40,6 +41,7 @@ AFPSJanggiAbilityPlayerController::AFPSJanggiAbilityPlayerController()
 void AFPSJanggiAbilityPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	EnsureScriptDirectoryActor();
 	BuildPlayablePieces();
 	SelectPieceIndex(0);
 }
@@ -107,6 +109,29 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 			kkw_source_actor->SetActorEnableCollision(false);
 		}
 	}
+}
+
+void AFPSJanggiAbilityPlayerController::EnsureScriptDirectoryActor()
+{
+	if (!GetWorld() || FindActorByLabels({TEXT("KKW_Scripts_Folder")}))
+	{
+		return;
+	}
+
+	FActorSpawnParameters kkw_spawn_params;
+	kkw_spawn_params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AKKWProjectScriptsActor* kkw_scripts_actor = GetWorld()->SpawnActor<AKKWProjectScriptsActor>(
+		AKKWProjectScriptsActor::StaticClass(),
+		FindFallbackCenter(),
+		FRotator::ZeroRotator,
+		kkw_spawn_params);
+
+#if WITH_EDITOR
+	if (kkw_scripts_actor)
+	{
+		kkw_scripts_actor->SetActorLabel(TEXT("KKW_Scripts_Folder"));
+	}
+#endif
 }
 
 void AFPSJanggiAbilityPlayerController::SelectPieceIndex(int32 kkw_index)

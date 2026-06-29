@@ -25,6 +25,7 @@ protected:
 	TArray<TObjectPtr<AFPSJanggiAbilityCharacter>> kkw_controlled_pieces;
 
 	void BuildPlayablePieces();
+	void EnsureScriptDirectoryActor();
 	void SelectPieceIndex(int32 kkw_index);
 	void SelectPiece1();
 	void SelectPiece2();

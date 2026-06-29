@@ -53,13 +53,13 @@ protected:
 	TObjectPtr<USkeletalMeshComponent> kkw_first_person_mesh;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_viewmodel")
-	float kkw_first_person_visual_scale = 5.5f;
+	float kkw_first_person_visual_scale = 10.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_viewmodel")
-	FVector kkw_first_person_target_center = FVector(78.0f, 0.0f, -24.0f);
+	FVector kkw_first_person_target_center = FVector(96.0f, 36.0f, -42.0f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_viewmodel")
-	FRotator kkw_first_person_mesh_rotation = FRotator(0.0f, -90.0f, 0.0f);
+	FRotator kkw_first_person_mesh_rotation = FRotator::ZeroRotator;
 
 	UPROPERTY(VisibleAnywhere, Category = "kkw_viewmodel")
 	FVector kkw_first_person_camera_location = FVector::ZeroVector;
@@ -74,10 +74,13 @@ protected:
 	FText kkw_piece_label;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_piece")
-	float kkw_character_visual_scale = 1.6f;
+	float kkw_character_visual_scale = 2.2f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_piece")
-	float kkw_piece_forward_yaw_offset = -90.0f;
+	float kkw_piece_forward_yaw_offset = 90.0f;
+
+	UPROPERTY(VisibleAnywhere, Category = "kkw_piece")
+	FRotator kkw_mesh_relative_rotation = FRotator::ZeroRotator;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Stats")
 	float kkw_max_health = 400.0f;

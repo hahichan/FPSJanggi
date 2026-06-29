@@ -130,7 +130,9 @@ void AFPSJanggiAbilityCharacter::ConfigurePiece(EFPSJanggiPieceRole kkw_in_role,
 	GetMesh()->SetWorldScale3D(kkw_piece_scale);
 	RefreshFirstPersonMeshTransform();
 	const FRotator kkw_source_rotation = kkw_source_mesh_transform.Rotator();
-	SetActorRotation(FRotator(0.0f, kkw_source_rotation.Yaw + kkw_piece_forward_yaw_offset, 0.0f));
+	const FRotator kkw_actor_rotation(0.0f, kkw_source_rotation.Yaw + kkw_piece_forward_yaw_offset, 0.0f);
+	SetActorRotation(kkw_actor_rotation);
+	kkw_mesh_relative_rotation = (kkw_actor_rotation.Quaternion().Inverse() * kkw_source_rotation.Quaternion()).Rotator();
 	CenterMeshOnCapsule();
 
 	if (kkw_b_use_source_placement && kkw_in_mesh)
@@ -339,7 +341,7 @@ void AFPSJanggiAbilityCharacter::CenterMeshOnCapsule()
 
 	GetCapsuleComponent()->SetCapsuleSize(kkw_radius, kkw_half_height, true);
 	GetMesh()->SetRelativeLocation(FVector(-kkw_bounds.Origin.X * kkw_scale.X, -kkw_bounds.Origin.Y * kkw_scale.Y, -kkw_half_height - kkw_mesh_min_z));
-	GetMesh()->SetRelativeRotation(FRotator::ZeroRotator);
+	GetMesh()->SetRelativeRotation(kkw_mesh_relative_rotation);
 
 	kkw_camera_boom->TargetOffset = FVector(0.0f, 0.0f, kkw_camera_target_z);
 	kkw_camera_boom->SocketOffset = FVector::ZeroVector;
@@ -642,16 +644,16 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshTransform()
 	switch (kkw_piece_role)
 	{
 	case EFPSJanggiPieceRole::Cannon:
-		kkw_view_scale = 3.6f;
-		kkw_view_center = FVector(84.0f, 32.0f, -58.0f);
+		kkw_view_scale = 11.5f;
+		kkw_view_center = FVector(112.0f, 34.0f, -38.0f);
 		break;
 	case EFPSJanggiPieceRole::Guard:
-		kkw_view_scale = 4.0f;
-		kkw_view_center = FVector(82.0f, 34.0f, -58.0f);
+		kkw_view_scale = 13.0f;
+		kkw_view_center = FVector(104.0f, 40.0f, -44.0f);
 		break;
 	case EFPSJanggiPieceRole::Chariot:
-		kkw_view_scale = 3.8f;
-		kkw_view_center = FVector(84.0f, 34.0f, -58.0f);
+		kkw_view_scale = 12.0f;
+		kkw_view_center = FVector(104.0f, 42.0f, -44.0f);
 		break;
 	}
 
@@ -687,7 +689,6 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshSections()
 	{
 		const FString kkw_slot_name = kkw_materials[kkw_material_index].MaterialSlotName.ToString().ToLower();
 		const bool kkw_b_is_first_person_part =
-			kkw_slot_name.Contains(TEXT("_h")) ||
 			kkw_slot_name.Contains(TEXT("canon")) ||
 			kkw_slot_name.Contains(TEXT("shield")) ||
 			kkw_slot_name.Contains(TEXT("armor")) ||

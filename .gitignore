@@ -4,11 +4,13 @@ Intermediate
 Saved
 .vscode
 .vs
+Plugins/VisualStudioTools/
 *.VC.db
 *.opensdf
 *.opendb
 *.sdf
 *.sln
+*.slnx
 *.suo
 *.xcodeproj
 *.xcworkspace

@@ -6,6 +6,7 @@ kkw_required_classes = [
     "/Script/FPSJanggi.FPSJanggiAbilityPlayerController",
     "/Script/FPSJanggi.FPSJanggiAbilityCharacter",
     "/Script/FPSJanggi.FPSJanggiAbilityProjectile",
+    "/Script/FPSJanggi.KKWProjectScriptsActor",
 ]
 
 kkw_required_assets = [
