@@ -175,10 +175,17 @@ void AFPSJanggiAbilityCharacter::ConfigurePiece(EFPSJanggiPieceRole kkw_in_role,
 		RefreshFirstPersonMeshSections();
 	}
 
+	ApplySourcePlacementTransform(kkw_source_mesh_transform, kkw_b_use_source_placement);
+	SetFirstPersonActive(false);
+}
+
+void AFPSJanggiAbilityCharacter::ApplySourcePlacementTransform(const FTransform& kkw_source_mesh_transform, bool kkw_b_use_source_placement, bool kkw_b_snap_to_ground)
+{
+	USkeletalMesh* kkw_mesh_asset = GetMesh()->GetSkeletalMeshAsset();
 	float kkw_height_fit_scale = kkw_character_visual_scale;
-	if (kkw_in_mesh)
+	if (kkw_mesh_asset)
 	{
-		const FBoxSphereBounds kkw_bounds = kkw_in_mesh->GetBounds();
+		const FBoxSphereBounds kkw_bounds = kkw_mesh_asset->GetBounds();
 		const float kkw_source_visual_height = FMath::Max(1.0f, kkw_bounds.BoxExtent.Z * 2.0f);
 		kkw_height_fit_scale *= kkw_target_visual_height / kkw_source_visual_height;
 	}
@@ -193,21 +200,23 @@ void AFPSJanggiAbilityCharacter::ConfigurePiece(EFPSJanggiPieceRole kkw_in_role,
 	kkw_mesh_relative_rotation = (kkw_actor_rotation.Quaternion().Inverse() * kkw_source_yaw_rotation.Quaternion()).Rotator();
 	CenterMeshOnCapsule();
 
-	if (kkw_b_use_source_placement && kkw_in_mesh)
+	if (kkw_b_use_source_placement && kkw_mesh_asset)
 	{
-		const FBoxSphereBounds kkw_bounds = kkw_in_mesh->GetBounds();
+		const FBoxSphereBounds kkw_bounds = kkw_mesh_asset->GetBounds();
 		const float kkw_half_height = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 		const FVector kkw_center_xy = kkw_source_mesh_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, 0.0f));
+		const FVector kkw_source_bottom = kkw_source_mesh_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, kkw_bounds.Origin.Z - kkw_bounds.BoxExtent.Z));
 		const FVector kkw_source_location = kkw_source_mesh_transform.GetLocation();
-		FVector kkw_desired_location(kkw_center_xy.X, kkw_center_xy.Y, kkw_source_location.Z + kkw_half_height + kkw_ground_snap_offset);
-		const FVector kkw_trace_start(kkw_desired_location.X, kkw_desired_location.Y, kkw_source_location.Z + 2000.0f);
-		const FVector kkw_trace_end(kkw_desired_location.X, kkw_desired_location.Y, kkw_source_location.Z - 8000.0f);
-		FindGroundSnapLocation(kkw_trace_start, kkw_trace_end, kkw_half_height, kkw_desired_location);
+		FVector kkw_desired_location(kkw_center_xy.X, kkw_center_xy.Y, kkw_source_bottom.Z + kkw_half_height + kkw_ground_snap_offset);
+		if (kkw_b_snap_to_ground)
+		{
+			const FVector kkw_trace_start(kkw_desired_location.X, kkw_desired_location.Y, kkw_source_location.Z + 2000.0f);
+			const FVector kkw_trace_end(kkw_desired_location.X, kkw_desired_location.Y, kkw_source_location.Z - 8000.0f);
+			FindGroundSnapLocation(kkw_trace_start, kkw_trace_end, kkw_half_height, kkw_desired_location);
+		}
 
 		SetActorLocation(kkw_desired_location, false);
 	}
-
-	SetFirstPersonActive(false);
 }
 
 void AFPSJanggiAbilityCharacter::ConfigureAnimations(UAnimSequence* kkw_in_idle_animation, UAnimSequence* kkw_in_move_animation, UAnimSequence* kkw_in_attack_animation, UAnimSequence* kkw_in_run_animation)

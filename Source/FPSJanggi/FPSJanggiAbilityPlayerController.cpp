@@ -35,6 +35,8 @@ FString NormalizeActorLabel(const FString& kkw_label)
 
 AFPSJanggiAbilityPlayerController::AFPSJanggiAbilityPlayerController()
 {
+	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bStartWithTickEnabled = true;
 	bAutoManageActiveCameraTarget = false;
 }
 
@@ -44,6 +46,12 @@ void AFPSJanggiAbilityPlayerController::BeginPlay()
 	EnsureScriptDirectoryActor();
 	BuildPlayablePieces();
 	SelectPieceIndex(0);
+}
+
+void AFPSJanggiAbilityPlayerController::Tick(float kkw_delta_seconds)
+{
+	Super::Tick(kkw_delta_seconds);
+	SyncSourcePiecePlacements();
 }
 
 void AFPSJanggiAbilityPlayerController::SetupInputComponent()
@@ -110,11 +118,47 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 			LoadAnimation(kkw_spec.kkw_attack_animation_path),
 			LoadAnimation(kkw_spec.kkw_run_animation_path));
 		kkw_controlled_pieces.Add(kkw_piece);
+		kkw_source_piece_actors.Add(kkw_source_actor);
+		kkw_last_source_piece_transforms.Add(kkw_source_actor ? GetSourcePlacementTransform(kkw_source_actor) : kkw_spawn_transform);
 
 		if (kkw_source_actor)
 		{
 			kkw_source_actor->SetActorHiddenInGame(true);
 			kkw_source_actor->SetActorEnableCollision(false);
+		}
+	}
+}
+
+void AFPSJanggiAbilityPlayerController::SyncSourcePiecePlacements()
+{
+	if (kkw_controlled_pieces.Num() != kkw_source_piece_actors.Num() || kkw_controlled_pieces.Num() != kkw_last_source_piece_transforms.Num())
+	{
+		return;
+	}
+
+	for (int32 kkw_index = 0; kkw_index < kkw_controlled_pieces.Num(); ++kkw_index)
+	{
+		AFPSJanggiAbilityCharacter* kkw_piece = kkw_controlled_pieces[kkw_index];
+		AActor* kkw_source_actor = kkw_source_piece_actors[kkw_index];
+		if (!IsValid(kkw_piece) || !IsValid(kkw_source_actor))
+		{
+			continue;
+		}
+
+		const FTransform kkw_source_transform = GetSourcePlacementTransform(kkw_source_actor);
+		if (kkw_source_transform.Equals(kkw_last_source_piece_transforms[kkw_index], 0.05f))
+		{
+			continue;
+		}
+
+		kkw_piece->ApplySourcePlacementTransform(kkw_source_transform, true, false);
+		kkw_last_source_piece_transforms[kkw_index] = kkw_source_transform;
+
+		if (GetPawn() == kkw_piece)
+		{
+			SetControlRotation(FRotator(0.0f, kkw_piece->GetActorRotation().Yaw, 0.0f));
+			SetViewTarget(kkw_piece);
+			kkw_piece->ForceFirstPersonView();
 		}
 	}
 }
@@ -237,6 +281,21 @@ AActor* AFPSJanggiAbilityPlayerController::FindActorByLabels(const TArray<FStrin
 	}
 
 	return nullptr;
+}
+
+FTransform AFPSJanggiAbilityPlayerController::GetSourcePlacementTransform(AActor* kkw_source_actor) const
+{
+	if (!kkw_source_actor)
+	{
+		return FTransform::Identity;
+	}
+
+	if (USkeletalMeshComponent* kkw_source_mesh_component = Cast<USkeletalMeshComponent>(kkw_source_actor->GetComponentByClass(USkeletalMeshComponent::StaticClass())))
+	{
+		return kkw_source_mesh_component->GetComponentTransform();
+	}
+
+	return kkw_source_actor->GetActorTransform();
 }
 
 FVector AFPSJanggiAbilityPlayerController::FindFallbackCenter() const

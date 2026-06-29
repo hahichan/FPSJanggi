@@ -8,6 +8,7 @@
 #include "FPSJanggiAbilityPlayerController.generated.h"
 
 class UAnimSequence;
+class AActor;
 
 UCLASS()
 class FPSJANGGI_API AFPSJanggiAbilityPlayerController : public APlayerController
@@ -18,14 +19,21 @@ public:
 	AFPSJanggiAbilityPlayerController();
 
 	virtual void BeginPlay() override;
+	virtual void Tick(float kkw_delta_seconds) override;
 	virtual void SetupInputComponent() override;
 
 protected:
 	UPROPERTY()
 	TArray<TObjectPtr<AFPSJanggiAbilityCharacter>> kkw_controlled_pieces;
 
+	UPROPERTY()
+	TArray<TObjectPtr<AActor>> kkw_source_piece_actors;
+
+	TArray<FTransform> kkw_last_source_piece_transforms;
+
 	void BuildPlayablePieces();
 	void EnsureScriptDirectoryActor();
+	void SyncSourcePiecePlacements();
 	void SelectPieceIndex(int32 kkw_index);
 	void SelectPiece1();
 	void SelectPiece2();
@@ -36,6 +44,7 @@ protected:
 	void ToggleCameraMode();
 
 	AActor* FindActorByLabels(const TArray<FString>& kkw_labels) const;
+	FTransform GetSourcePlacementTransform(AActor* kkw_source_actor) const;
 	FVector FindFallbackCenter() const;
 	USkeletalMesh* LoadMesh(const TCHAR* kkw_mesh_path) const;
 	UAnimSequence* LoadAnimation(const TCHAR* kkw_animation_path) const;
