@@ -16,6 +16,23 @@
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
+namespace
+{
+FString KKWNormalizeActorText(const FString& kkw_text)
+{
+	FString kkw_result = kkw_text.ToLower();
+	kkw_result.ReplaceInline(TEXT(" "), TEXT(""));
+	kkw_result.ReplaceInline(TEXT("_"), TEXT(""));
+	kkw_result.ReplaceInline(TEXT("-"), TEXT(""));
+	return kkw_result;
+}
+
+FString KKWGroundActorText(const AActor* kkw_actor)
+{
+	return kkw_actor ? KKWNormalizeActorText(kkw_actor->GetActorNameOrLabel() + TEXT(" ") + kkw_actor->GetName()) : FString();
+}
+}
+
 AFPSJanggiAbilityCharacter::AFPSJanggiAbilityCharacter()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -126,13 +143,22 @@ void AFPSJanggiAbilityCharacter::ConfigurePiece(EFPSJanggiPieceRole kkw_in_role,
 		RefreshFirstPersonMeshSections();
 	}
 
-	const FVector kkw_piece_scale = kkw_source_mesh_transform.GetScale3D() * kkw_character_visual_scale;
+	float kkw_height_fit_scale = kkw_character_visual_scale;
+	if (kkw_in_mesh)
+	{
+		const FBoxSphereBounds kkw_bounds = kkw_in_mesh->GetBounds();
+		const float kkw_source_visual_height = FMath::Max(1.0f, kkw_bounds.BoxExtent.Z * 2.0f);
+		kkw_height_fit_scale *= kkw_target_visual_height / kkw_source_visual_height;
+	}
+
+	const FVector kkw_piece_scale = kkw_source_mesh_transform.GetScale3D() * kkw_height_fit_scale;
 	GetMesh()->SetWorldScale3D(kkw_piece_scale);
 	RefreshFirstPersonMeshTransform();
 	const FRotator kkw_source_rotation = kkw_source_mesh_transform.Rotator();
-	const FRotator kkw_actor_rotation(0.0f, kkw_source_rotation.Yaw + kkw_piece_forward_yaw_offset, 0.0f);
+	const FRotator kkw_source_yaw_rotation(0.0f, kkw_source_rotation.Yaw, 0.0f);
+	const FRotator kkw_actor_rotation(0.0f, kkw_source_yaw_rotation.Yaw + kkw_piece_forward_yaw_offset, 0.0f);
 	SetActorRotation(kkw_actor_rotation);
-	kkw_mesh_relative_rotation = (kkw_actor_rotation.Quaternion().Inverse() * kkw_source_rotation.Quaternion()).Rotator();
+	kkw_mesh_relative_rotation = (kkw_actor_rotation.Quaternion().Inverse() * kkw_source_yaw_rotation.Quaternion()).Rotator();
 	CenterMeshOnCapsule();
 
 	if (kkw_b_use_source_placement && kkw_in_mesh)
@@ -141,16 +167,10 @@ void AFPSJanggiAbilityCharacter::ConfigurePiece(EFPSJanggiPieceRole kkw_in_role,
 		const float kkw_half_height = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 		const FVector kkw_center_xy = kkw_source_mesh_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, 0.0f));
 		const FVector kkw_source_location = kkw_source_mesh_transform.GetLocation();
-		FVector kkw_desired_location(kkw_center_xy.X, kkw_center_xy.Y, kkw_source_location.Z + kkw_half_height + 3.0f);
-
-		FHitResult kkw_ground_hit;
-		FCollisionQueryParams kkw_ground_params(SCENE_QUERY_STAT(JanggiGroundSnap), false, this);
-		const FVector kkw_trace_start(kkw_desired_location.X, kkw_desired_location.Y, kkw_desired_location.Z + 1200.0f);
-		const FVector kkw_trace_end(kkw_desired_location.X, kkw_desired_location.Y, kkw_desired_location.Z - 2400.0f);
-		if (GetWorld() && GetWorld()->LineTraceSingleByChannel(kkw_ground_hit, kkw_trace_start, kkw_trace_end, ECC_WorldStatic, kkw_ground_params))
-		{
-			kkw_desired_location.Z = kkw_ground_hit.ImpactPoint.Z + kkw_half_height + 3.0f;
-		}
+		FVector kkw_desired_location(kkw_center_xy.X, kkw_center_xy.Y, kkw_source_location.Z + kkw_half_height + kkw_ground_snap_offset);
+		const FVector kkw_trace_start(kkw_desired_location.X, kkw_desired_location.Y, kkw_source_location.Z + 2000.0f);
+		const FVector kkw_trace_end(kkw_desired_location.X, kkw_desired_location.Y, kkw_source_location.Z - 8000.0f);
+		FindGroundSnapLocation(kkw_trace_start, kkw_trace_end, kkw_half_height, kkw_desired_location);
 
 		SetActorLocation(kkw_desired_location, false);
 	}
@@ -332,8 +352,8 @@ void AFPSJanggiAbilityCharacter::CenterMeshOnCapsule()
 	const FVector kkw_scale = GetMesh()->GetRelativeScale3D();
 	const float kkw_visual_height = FMath::Max(8.0f, kkw_bounds.BoxExtent.Z * 2.0f * kkw_scale.Z);
 	const float kkw_visual_radius = FMath::Max(kkw_bounds.BoxExtent.X * kkw_scale.X, kkw_bounds.BoxExtent.Y * kkw_scale.Y);
-	const float kkw_radius = FMath::Clamp(kkw_visual_radius + 10.0f, 14.0f, 90.0f);
-	const float kkw_half_height = FMath::Clamp(kkw_visual_height * 0.5f + 18.0f, 24.0f, 140.0f);
+	const float kkw_radius = FMath::Clamp(kkw_visual_radius * 0.45f + 18.0f, 30.0f, 160.0f);
+	const float kkw_half_height = FMath::Clamp(kkw_visual_height * 0.5f + 18.0f, 60.0f, 190.0f);
 	const float kkw_mesh_min_z = (kkw_bounds.Origin.Z - kkw_bounds.BoxExtent.Z) * kkw_scale.Z;
 	const float kkw_camera_target_z = FMath::Clamp(-kkw_half_height + kkw_visual_height * 1.15f, -kkw_half_height + 8.0f, kkw_half_height * 0.75f);
 	const float kkw_camera_forward_offset = FMath::Clamp(kkw_radius * 0.35f, 4.0f, 18.0f);
@@ -349,6 +369,70 @@ void AFPSJanggiAbilityCharacter::CenterMeshOnCapsule()
 	kkw_follow_camera->SetRelativeLocation(kkw_first_person_camera_location);
 	kkw_follow_camera->SetRelativeRotation(FRotator::ZeroRotator);
 	ApplyCameraMode();
+}
+
+bool AFPSJanggiAbilityCharacter::FindGroundSnapLocation(const FVector& kkw_trace_start, const FVector& kkw_trace_end, float kkw_half_height, FVector& kkw_out_location) const
+{
+	if (!GetWorld())
+	{
+		return false;
+	}
+
+	FCollisionQueryParams kkw_ground_params(SCENE_QUERY_STAT(JanggiGroundSnap), false, this);
+	kkw_ground_params.AddIgnoredActor(this);
+
+	TArray<FHitResult> kkw_hits;
+	if (!GetWorld()->LineTraceMultiByChannel(kkw_hits, kkw_trace_start, kkw_trace_end, ECC_WorldStatic, kkw_ground_params))
+	{
+		return false;
+	}
+
+	const FHitResult* kkw_fallback_hit = nullptr;
+	for (const FHitResult& kkw_hit : kkw_hits)
+	{
+		if (!kkw_hit.bBlockingHit || kkw_hit.ImpactNormal.Z < 0.45f || IsRejectedGroundHit(kkw_hit))
+		{
+			continue;
+		}
+
+		if (IsPreferredGroundHit(kkw_hit))
+		{
+			kkw_out_location.Z = kkw_hit.ImpactPoint.Z + kkw_half_height + kkw_ground_snap_offset;
+			return true;
+		}
+
+		if (!kkw_fallback_hit)
+		{
+			kkw_fallback_hit = &kkw_hit;
+		}
+	}
+
+	if (kkw_fallback_hit)
+	{
+		kkw_out_location.Z = kkw_fallback_hit->ImpactPoint.Z + kkw_half_height + kkw_ground_snap_offset;
+		return true;
+	}
+
+	return false;
+}
+
+bool AFPSJanggiAbilityCharacter::IsPreferredGroundHit(const FHitResult& kkw_hit) const
+{
+	const FString kkw_ground_text = KKWGroundActorText(kkw_hit.GetActor());
+	return kkw_ground_text.Contains(TEXT("landscape")) || kkw_ground_text.Contains(TEXT("bppatch")) || kkw_ground_text.Contains(TEXT("janggiboard"));
+}
+
+bool AFPSJanggiAbilityCharacter::IsRejectedGroundHit(const FHitResult& kkw_hit) const
+{
+	const FString kkw_ground_text = KKWGroundActorText(kkw_hit.GetActor());
+	return kkw_ground_text.Contains(TEXT("stone")) ||
+		kkw_ground_text.Contains(TEXT("rock")) ||
+		kkw_ground_text.Contains(TEXT("wall")) ||
+		kkw_ground_text.Contains(TEXT("wood")) ||
+		kkw_ground_text.Contains(TEXT("cart")) ||
+		kkw_ground_text.Contains(TEXT("door")) ||
+		kkw_ground_text.Contains(TEXT("torus")) ||
+		kkw_ground_text.Contains(TEXT("sword"));
 }
 
 void AFPSJanggiAbilityCharacter::ApplyRoleStats()
@@ -652,8 +736,8 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshTransform()
 		kkw_view_center = FVector(104.0f, 40.0f, -44.0f);
 		break;
 	case EFPSJanggiPieceRole::Chariot:
-		kkw_view_scale = 12.0f;
-		kkw_view_center = FVector(104.0f, 42.0f, -44.0f);
+		kkw_view_scale = 18.0f;
+		kkw_view_center = FVector(118.0f, 0.0f, -58.0f);
 		break;
 	}
 
@@ -688,14 +772,19 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshSections()
 	for (int32 kkw_material_index = 0; kkw_material_index < kkw_materials.Num(); ++kkw_material_index)
 	{
 		const FString kkw_slot_name = kkw_materials[kkw_material_index].MaterialSlotName.ToString().ToLower();
-		const bool kkw_b_is_first_person_part =
-			kkw_slot_name.Contains(TEXT("canon")) ||
-			kkw_slot_name.Contains(TEXT("shield")) ||
-			kkw_slot_name.Contains(TEXT("armor")) ||
-			kkw_slot_name.Contains(TEXT("sword")) ||
-			kkw_slot_name.Contains(TEXT("spear")) ||
-			kkw_slot_name.Contains(TEXT("bow")) ||
-			kkw_slot_name.Contains(TEXT("bong"));
+		bool kkw_b_is_first_person_part = false;
+		switch (kkw_piece_role)
+		{
+		case EFPSJanggiPieceRole::Cannon:
+			kkw_b_is_first_person_part = kkw_slot_name.Contains(TEXT("canon"));
+			break;
+		case EFPSJanggiPieceRole::Guard:
+			kkw_b_is_first_person_part = kkw_slot_name.Contains(TEXT("shield"));
+			break;
+		case EFPSJanggiPieceRole::Chariot:
+			kkw_b_is_first_person_part = kkw_slot_name.Contains(TEXT("_h"));
+			break;
+		}
 
 		kkw_first_person_mesh->ShowMaterialSection(kkw_material_index, kkw_material_index, kkw_b_is_first_person_part, 0);
 	}

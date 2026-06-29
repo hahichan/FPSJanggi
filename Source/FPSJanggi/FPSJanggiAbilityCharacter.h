@@ -74,10 +74,16 @@ protected:
 	FText kkw_piece_label;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_piece")
-	float kkw_character_visual_scale = 2.2f;
+	float kkw_character_visual_scale = 1.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "kkw_piece")
+	float kkw_target_visual_height = 290.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_piece")
 	float kkw_piece_forward_yaw_offset = 90.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "kkw_piece")
+	float kkw_ground_snap_offset = 3.0f;
 
 	UPROPERTY(VisibleAnywhere, Category = "kkw_piece")
 	FRotator kkw_mesh_relative_rotation = FRotator::ZeroRotator;
@@ -141,6 +147,9 @@ protected:
 	void AbilityQPressed();
 
 	void CenterMeshOnCapsule();
+	bool FindGroundSnapLocation(const FVector& kkw_trace_start, const FVector& kkw_trace_end, float kkw_half_height, FVector& kkw_out_location) const;
+	bool IsPreferredGroundHit(const FHitResult& kkw_hit) const;
+	bool IsRejectedGroundHit(const FHitResult& kkw_hit) const;
 	void ApplyRoleStats();
 	FVector GetAimDirection() const;
 	FVector GetAbilityOrigin(float kkw_forward_offset = 120.0f) const;

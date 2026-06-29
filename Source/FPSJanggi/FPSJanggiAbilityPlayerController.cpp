@@ -80,7 +80,9 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 	{
 		AActor* kkw_source_actor = FindActorByLabels(kkw_spec.kkw_labels);
 		USkeletalMeshComponent* kkw_source_mesh_component = kkw_source_actor ? Cast<USkeletalMeshComponent>(kkw_source_actor->GetComponentByClass(USkeletalMeshComponent::StaticClass())) : nullptr;
-		USkeletalMesh* kkw_mesh = kkw_source_mesh_component ? kkw_source_mesh_component->GetSkeletalMeshAsset() : LoadMesh(kkw_spec.kkw_mesh_path);
+		USkeletalMesh* kkw_configured_mesh = LoadMesh(kkw_spec.kkw_mesh_path);
+		USkeletalMesh* kkw_source_mesh = kkw_source_mesh_component ? kkw_source_mesh_component->GetSkeletalMeshAsset() : nullptr;
+		USkeletalMesh* kkw_mesh = kkw_configured_mesh ? kkw_configured_mesh : kkw_source_mesh;
 		const bool kkw_b_use_source_placement = kkw_source_mesh_component && kkw_mesh;
 
 		const FTransform kkw_spawn_transform = kkw_b_use_source_placement
