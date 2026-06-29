@@ -119,11 +119,13 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 			LoadAnimation(kkw_spec.kkw_run_animation_path));
 		kkw_controlled_pieces.Add(kkw_piece);
 		kkw_source_piece_actors.Add(kkw_source_actor);
-		kkw_last_source_piece_transforms.Add(kkw_source_actor ? GetSourcePlacementTransform(kkw_source_actor) : kkw_spawn_transform);
+		const FTransform kkw_initial_source_transform = kkw_source_actor ? GetSourcePlacementTransform(kkw_source_actor) : kkw_spawn_transform;
+		kkw_last_source_piece_transforms.Add(kkw_initial_source_transform);
+		kkw_last_piece_source_transforms.Add(GetPieceSourceTransform(kkw_piece, kkw_initial_source_transform));
 
 		if (kkw_source_actor)
 		{
-			kkw_source_actor->SetActorHiddenInGame(true);
+			kkw_source_actor->SetActorHiddenInGame(false);
 			kkw_source_actor->SetActorEnableCollision(false);
 		}
 	}
@@ -131,7 +133,9 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 
 void AFPSJanggiAbilityPlayerController::SyncSourcePiecePlacements()
 {
-	if (kkw_controlled_pieces.Num() != kkw_source_piece_actors.Num() || kkw_controlled_pieces.Num() != kkw_last_source_piece_transforms.Num())
+	if (kkw_controlled_pieces.Num() != kkw_source_piece_actors.Num() ||
+		kkw_controlled_pieces.Num() != kkw_last_source_piece_transforms.Num() ||
+		kkw_controlled_pieces.Num() != kkw_last_piece_source_transforms.Num())
 	{
 		return;
 	}
@@ -146,13 +150,27 @@ void AFPSJanggiAbilityPlayerController::SyncSourcePiecePlacements()
 		}
 
 		const FTransform kkw_source_transform = GetSourcePlacementTransform(kkw_source_actor);
-		if (kkw_source_transform.Equals(kkw_last_source_piece_transforms[kkw_index], 0.05f))
+		const FTransform kkw_piece_source_transform = GetPieceSourceTransform(kkw_piece, kkw_source_transform);
+		const bool kkw_b_source_moved = !kkw_source_transform.Equals(kkw_last_source_piece_transforms[kkw_index], 0.05f);
+		const bool kkw_b_piece_moved = !kkw_piece_source_transform.Equals(kkw_last_piece_source_transforms[kkw_index], 0.05f);
+		if (!kkw_b_source_moved && !kkw_b_piece_moved)
 		{
 			continue;
 		}
 
-		kkw_piece->ApplySourcePlacementTransform(kkw_source_transform, true, false);
-		kkw_last_source_piece_transforms[kkw_index] = kkw_source_transform;
+		if (kkw_b_source_moved)
+		{
+			kkw_piece->ApplySourcePlacementTransform(kkw_source_transform, true, false);
+			kkw_last_source_piece_transforms[kkw_index] = kkw_source_transform;
+			kkw_last_piece_source_transforms[kkw_index] = GetPieceSourceTransform(kkw_piece, kkw_source_transform);
+		}
+		else
+		{
+			ApplyPiecePlacementToSource(kkw_source_actor, kkw_piece_source_transform);
+			const FTransform kkw_updated_source_transform = GetSourcePlacementTransform(kkw_source_actor);
+			kkw_last_source_piece_transforms[kkw_index] = kkw_updated_source_transform;
+			kkw_last_piece_source_transforms[kkw_index] = GetPieceSourceTransform(kkw_piece, kkw_updated_source_transform);
+		}
 
 		if (GetPawn() == kkw_piece)
 		{
@@ -161,6 +179,22 @@ void AFPSJanggiAbilityPlayerController::SyncSourcePiecePlacements()
 			kkw_piece->ForceFirstPersonView();
 		}
 	}
+}
+
+void AFPSJanggiAbilityPlayerController::ApplyPiecePlacementToSource(AActor* kkw_source_actor, const FTransform& kkw_source_transform) const
+{
+	if (!kkw_source_actor)
+	{
+		return;
+	}
+
+	if (USkeletalMeshComponent* kkw_source_mesh_component = Cast<USkeletalMeshComponent>(kkw_source_actor->GetComponentByClass(USkeletalMeshComponent::StaticClass())))
+	{
+		kkw_source_mesh_component->SetWorldTransform(kkw_source_transform, false, nullptr, ETeleportType::TeleportPhysics);
+		return;
+	}
+
+	kkw_source_actor->SetActorTransform(kkw_source_transform, false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 void AFPSJanggiAbilityPlayerController::EnsureScriptDirectoryActor()
@@ -296,6 +330,11 @@ FTransform AFPSJanggiAbilityPlayerController::GetSourcePlacementTransform(AActor
 	}
 
 	return kkw_source_actor->GetActorTransform();
+}
+
+FTransform AFPSJanggiAbilityPlayerController::GetPieceSourceTransform(AFPSJanggiAbilityCharacter* kkw_piece, const FTransform& kkw_current_source_transform) const
+{
+	return kkw_piece ? kkw_piece->BuildSourcePlacementTransformFromCurrentPiece(kkw_current_source_transform) : kkw_current_source_transform;
 }
 
 FVector AFPSJanggiAbilityPlayerController::FindFallbackCenter() const

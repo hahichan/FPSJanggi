@@ -38,6 +38,7 @@ public:
 
 	void ConfigurePiece(EFPSJanggiPieceRole kkw_in_role, USkeletalMesh* kkw_in_mesh, const FTransform& kkw_source_mesh_transform, bool kkw_b_use_source_placement);
 	void ApplySourcePlacementTransform(const FTransform& kkw_source_mesh_transform, bool kkw_b_use_source_placement, bool kkw_b_snap_to_ground = true);
+	FTransform BuildSourcePlacementTransformFromCurrentPiece(const FTransform& kkw_current_source_transform) const;
 	void ConfigureAnimations(UAnimSequence* kkw_idle_animation, UAnimSequence* kkw_move_animation, UAnimSequence* kkw_attack_animation, UAnimSequence* kkw_run_animation);
 	EFPSJanggiPieceRole GetPieceRole() const { return kkw_piece_role; }
 	void ForceFirstPersonView();

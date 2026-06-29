@@ -175,7 +175,7 @@ void AFPSJanggiAbilityCharacter::ConfigurePiece(EFPSJanggiPieceRole kkw_in_role,
 		RefreshFirstPersonMeshSections();
 	}
 
-	ApplySourcePlacementTransform(kkw_source_mesh_transform, kkw_b_use_source_placement);
+	ApplySourcePlacementTransform(kkw_source_mesh_transform, kkw_b_use_source_placement, false);
 	SetFirstPersonActive(false);
 }
 
@@ -195,6 +195,7 @@ void AFPSJanggiAbilityCharacter::ApplySourcePlacementTransform(const FTransform&
 	RefreshFirstPersonMeshTransform();
 	const FRotator kkw_source_rotation = kkw_source_mesh_transform.Rotator();
 	const FRotator kkw_source_yaw_rotation(0.0f, kkw_source_rotation.Yaw, 0.0f);
+	const FTransform kkw_source_yaw_transform(kkw_source_yaw_rotation, kkw_source_mesh_transform.GetLocation(), kkw_source_mesh_transform.GetScale3D());
 	const FRotator kkw_actor_rotation(0.0f, kkw_source_yaw_rotation.Yaw + kkw_piece_forward_yaw_offset, 0.0f);
 	SetActorRotation(kkw_actor_rotation);
 	kkw_mesh_relative_rotation = (kkw_actor_rotation.Quaternion().Inverse() * kkw_source_yaw_rotation.Quaternion()).Rotator();
@@ -204,8 +205,8 @@ void AFPSJanggiAbilityCharacter::ApplySourcePlacementTransform(const FTransform&
 	{
 		const FBoxSphereBounds kkw_bounds = kkw_mesh_asset->GetBounds();
 		const float kkw_half_height = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-		const FVector kkw_center_xy = kkw_source_mesh_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, 0.0f));
-		const FVector kkw_source_bottom = kkw_source_mesh_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, kkw_bounds.Origin.Z - kkw_bounds.BoxExtent.Z));
+		const FVector kkw_center_xy = kkw_source_yaw_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, 0.0f));
+		const FVector kkw_source_bottom = kkw_source_yaw_transform.TransformPosition(FVector(kkw_bounds.Origin.X, kkw_bounds.Origin.Y, kkw_bounds.Origin.Z - kkw_bounds.BoxExtent.Z));
 		const FVector kkw_source_location = kkw_source_mesh_transform.GetLocation();
 		FVector kkw_desired_location(kkw_center_xy.X, kkw_center_xy.Y, kkw_source_bottom.Z + kkw_half_height + kkw_ground_snap_offset);
 		if (kkw_b_snap_to_ground)
@@ -217,6 +218,39 @@ void AFPSJanggiAbilityCharacter::ApplySourcePlacementTransform(const FTransform&
 
 		SetActorLocation(kkw_desired_location, false);
 	}
+}
+
+FTransform AFPSJanggiAbilityCharacter::BuildSourcePlacementTransformFromCurrentPiece(const FTransform& kkw_current_source_transform) const
+{
+	USkeletalMesh* kkw_mesh_asset = GetMesh()->GetSkeletalMeshAsset();
+	if (!kkw_mesh_asset)
+	{
+		return kkw_current_source_transform;
+	}
+
+	float kkw_height_fit_scale = kkw_character_visual_scale;
+	const FBoxSphereBounds kkw_bounds = kkw_mesh_asset->GetBounds();
+	const float kkw_source_visual_height = FMath::Max(1.0f, kkw_bounds.BoxExtent.Z * 2.0f);
+	kkw_height_fit_scale *= kkw_target_visual_height / kkw_source_visual_height;
+
+	FVector kkw_source_scale = kkw_current_source_transform.GetScale3D();
+	if (kkw_height_fit_scale > KINDA_SMALL_NUMBER)
+	{
+		kkw_source_scale = GetMesh()->GetComponentScale() / kkw_height_fit_scale;
+	}
+
+	FRotator kkw_source_rotation(0.0f, GetActorRotation().Yaw - kkw_piece_forward_yaw_offset, 0.0f);
+	const FVector kkw_scaled_center(kkw_bounds.Origin.X * kkw_source_scale.X, kkw_bounds.Origin.Y * kkw_source_scale.Y, 0.0f);
+	const FVector kkw_rotated_center = kkw_source_rotation.RotateVector(kkw_scaled_center);
+	const float kkw_source_bottom_local_z = (kkw_bounds.Origin.Z - kkw_bounds.BoxExtent.Z) * kkw_source_scale.Z;
+	const float kkw_half_height = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	const FVector kkw_actor_location = GetActorLocation();
+	const FVector kkw_source_location(
+		kkw_actor_location.X - kkw_rotated_center.X,
+		kkw_actor_location.Y - kkw_rotated_center.Y,
+		kkw_actor_location.Z - kkw_half_height - kkw_ground_snap_offset - kkw_source_bottom_local_z);
+
+	return FTransform(kkw_source_rotation, kkw_source_location, kkw_source_scale);
 }
 
 void AFPSJanggiAbilityCharacter::ConfigureAnimations(UAnimSequence* kkw_in_idle_animation, UAnimSequence* kkw_in_move_animation, UAnimSequence* kkw_in_attack_animation, UAnimSequence* kkw_in_run_animation)

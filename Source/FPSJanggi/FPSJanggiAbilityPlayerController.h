@@ -30,10 +30,12 @@ protected:
 	TArray<TObjectPtr<AActor>> kkw_source_piece_actors;
 
 	TArray<FTransform> kkw_last_source_piece_transforms;
+	TArray<FTransform> kkw_last_piece_source_transforms;
 
 	void BuildPlayablePieces();
 	void EnsureScriptDirectoryActor();
 	void SyncSourcePiecePlacements();
+	void ApplyPiecePlacementToSource(AActor* kkw_source_actor, const FTransform& kkw_source_transform) const;
 	void SelectPieceIndex(int32 kkw_index);
 	void SelectPiece1();
 	void SelectPiece2();
@@ -45,6 +47,7 @@ protected:
 
 	AActor* FindActorByLabels(const TArray<FString>& kkw_labels) const;
 	FTransform GetSourcePlacementTransform(AActor* kkw_source_actor) const;
+	FTransform GetPieceSourceTransform(AFPSJanggiAbilityCharacter* kkw_piece, const FTransform& kkw_current_source_transform) const;
 	FVector FindFallbackCenter() const;
 	USkeletalMesh* LoadMesh(const TCHAR* kkw_mesh_path) const;
 	UAnimSequence* LoadAnimation(const TCHAR* kkw_animation_path) const;
