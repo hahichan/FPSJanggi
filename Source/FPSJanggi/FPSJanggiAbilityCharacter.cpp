@@ -8,11 +8,13 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
 #include "FPSJanggiAbilityProjectile.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInterface.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -61,6 +63,36 @@ AFPSJanggiAbilityCharacter::AFPSJanggiAbilityCharacter()
 	kkw_first_person_mesh->SetVisibility(false, true);
 	kkw_first_person_mesh->SetRelativeRotation(kkw_first_person_mesh_rotation);
 	kkw_first_person_mesh->SetRelativeScale3D(FVector(kkw_first_person_visual_scale));
+
+	kkw_left_fist_mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("kkw_left_fist_mesh"));
+	kkw_left_fist_mesh->SetupAttachment(kkw_follow_camera);
+	kkw_left_fist_mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	kkw_left_fist_mesh->SetCanEverAffectNavigation(false);
+	kkw_left_fist_mesh->SetCastShadow(false);
+	kkw_left_fist_mesh->bReceivesDecals = false;
+	kkw_left_fist_mesh->SetVisibility(false, true);
+
+	kkw_right_fist_mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("kkw_right_fist_mesh"));
+	kkw_right_fist_mesh->SetupAttachment(kkw_follow_camera);
+	kkw_right_fist_mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	kkw_right_fist_mesh->SetCanEverAffectNavigation(false);
+	kkw_right_fist_mesh->SetCastShadow(false);
+	kkw_right_fist_mesh->bReceivesDecals = false;
+	kkw_right_fist_mesh->SetVisibility(false, true);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> kkw_fist_mesh_asset(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (kkw_fist_mesh_asset.Succeeded())
+	{
+		kkw_left_fist_mesh->SetStaticMesh(kkw_fist_mesh_asset.Object);
+		kkw_right_fist_mesh->SetStaticMesh(kkw_fist_mesh_asset.Object);
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> kkw_fist_material(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (kkw_fist_material.Succeeded())
+	{
+		kkw_left_fist_mesh->SetMaterial(0, kkw_fist_material.Object);
+		kkw_right_fist_mesh->SetMaterial(0, kkw_fist_material.Object);
+	}
 
 	bUseControllerRotationYaw = true;
 	GetCharacterMovement()->bOrientRotationToMovement = false;
@@ -358,6 +390,7 @@ void AFPSJanggiAbilityCharacter::CenterMeshOnCapsule()
 	const float kkw_camera_target_z = FMath::Clamp(-kkw_half_height + kkw_visual_height * 1.15f, -kkw_half_height + 8.0f, kkw_half_height * 0.75f);
 	const float kkw_camera_forward_offset = FMath::Clamp(kkw_radius * 0.35f, 4.0f, 18.0f);
 	kkw_first_person_camera_location = FVector(kkw_camera_forward_offset, 0.0f, kkw_camera_target_z);
+	kkw_third_person_camera_location = FVector(-(kkw_radius + 520.0f), 0.0f, FMath::Clamp(kkw_half_height * 1.15f, 150.0f, 300.0f));
 
 	GetCapsuleComponent()->SetCapsuleSize(kkw_radius, kkw_half_height, true);
 	GetMesh()->SetRelativeLocation(FVector(-kkw_bounds.Origin.X * kkw_scale.X, -kkw_bounds.Origin.Y * kkw_scale.Y, -kkw_half_height - kkw_mesh_min_z));
@@ -732,12 +765,12 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshTransform()
 		kkw_view_center = FVector(112.0f, 34.0f, -38.0f);
 		break;
 	case EFPSJanggiPieceRole::Guard:
-		kkw_view_scale = 13.0f;
-		kkw_view_center = FVector(104.0f, 40.0f, -44.0f);
+		kkw_view_scale = 5.2f;
+		kkw_view_center = FVector(126.0f, 34.0f, -56.0f);
 		break;
 	case EFPSJanggiPieceRole::Chariot:
-		kkw_view_scale = 18.0f;
-		kkw_view_center = FVector(118.0f, 0.0f, -58.0f);
+		kkw_view_scale = 1.0f;
+		kkw_view_center = FVector(0.0f, 0.0f, -1000.0f);
 		break;
 	}
 
@@ -782,7 +815,7 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshSections()
 			kkw_b_is_first_person_part = kkw_slot_name.Contains(TEXT("shield"));
 			break;
 		case EFPSJanggiPieceRole::Chariot:
-			kkw_b_is_first_person_part = kkw_slot_name.Contains(TEXT("_h"));
+			kkw_b_is_first_person_part = false;
 			break;
 		}
 
@@ -790,19 +823,55 @@ void AFPSJanggiAbilityCharacter::RefreshFirstPersonMeshSections()
 	}
 }
 
+void AFPSJanggiAbilityCharacter::RefreshFistViewmodelTransform()
+{
+	if (!kkw_left_fist_mesh || !kkw_right_fist_mesh)
+	{
+		return;
+	}
+
+	kkw_left_fist_mesh->SetRelativeLocation(FVector(94.0f, -28.0f, -38.0f));
+	kkw_left_fist_mesh->SetRelativeRotation(FRotator(-8.0f, 8.0f, -10.0f));
+	kkw_left_fist_mesh->SetRelativeScale3D(FVector(0.28f, 0.16f, 0.15f));
+
+	kkw_right_fist_mesh->SetRelativeLocation(FVector(94.0f, 28.0f, -38.0f));
+	kkw_right_fist_mesh->SetRelativeRotation(FRotator(-8.0f, -8.0f, 10.0f));
+	kkw_right_fist_mesh->SetRelativeScale3D(FVector(0.28f, 0.16f, 0.15f));
+}
+
+void AFPSJanggiAbilityCharacter::SetFistViewmodelVisible(bool kkw_b_visible)
+{
+	if (kkw_left_fist_mesh)
+	{
+		kkw_left_fist_mesh->SetVisibility(kkw_b_visible, true);
+	}
+
+	if (kkw_right_fist_mesh)
+	{
+		kkw_right_fist_mesh->SetVisibility(kkw_b_visible, true);
+	}
+}
+
 void AFPSJanggiAbilityCharacter::ApplyCameraMode()
 {
 	const bool kkw_b_show_first_person_mesh = kkw_b_selected_view_target && !kkw_b_third_person_active;
+	const bool kkw_b_show_fist_viewmodel = kkw_b_show_first_person_mesh && kkw_piece_role == EFPSJanggiPieceRole::Chariot;
 	GetMesh()->SetVisibility(!kkw_b_show_first_person_mesh, true);
 
 	if (kkw_first_person_mesh)
 	{
-		kkw_first_person_mesh->SetVisibility(kkw_b_show_first_person_mesh, true);
-		if (kkw_b_show_first_person_mesh)
+		kkw_first_person_mesh->SetVisibility(kkw_b_show_first_person_mesh && !kkw_b_show_fist_viewmodel, true);
+		if (kkw_b_show_first_person_mesh && !kkw_b_show_fist_viewmodel)
 		{
 			RefreshFirstPersonMeshSections();
 			RefreshFirstPersonMeshTransform();
 		}
+	}
+
+	SetFistViewmodelVisible(kkw_b_show_fist_viewmodel);
+	if (kkw_b_show_fist_viewmodel)
+	{
+		RefreshFistViewmodelTransform();
 	}
 
 	if (kkw_follow_camera)

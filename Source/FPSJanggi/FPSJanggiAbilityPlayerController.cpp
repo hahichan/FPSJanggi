@@ -76,8 +76,9 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 		{{TEXT("SkeletalMeshActor6"), TEXT("SkeletonMeshActor6")}, EFPSJanggiPieceRole::Chariot, TEXT("/Game/User/Charactor/Chariot_B/SK_Chariot_B_CharacterWeapon.SK_Chariot_B_CharacterWeapon"), TEXT("/Game/User/Charactor/Chariot_B/SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_Idle.SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_Idle"), TEXT("/Game/User/Charactor/Chariot_B/SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_Move.SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_Move"), TEXT("/Game/User/Charactor/Chariot_B/SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_attack_ammor.SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_attack_ammor"), TEXT("/Game/User/Charactor/Chariot_B/SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_run.SK_Chariot_B_CharacterWeaponMP_Piece_03_Armature_run"), FVector(420.0f, 260.0f, 170.0f)}
 	};
 
-	for (const FPieceSpawnSpec& kkw_spec : kkw_specs)
+	for (int32 kkw_spawn_index = 0; kkw_spawn_index < kkw_specs.Num(); ++kkw_spawn_index)
 	{
+		const FPieceSpawnSpec& kkw_spec = kkw_specs[kkw_spawn_index];
 		AActor* kkw_source_actor = FindActorByLabels(kkw_spec.kkw_labels);
 		USkeletalMeshComponent* kkw_source_mesh_component = kkw_source_actor ? Cast<USkeletalMeshComponent>(kkw_source_actor->GetComponentByClass(USkeletalMeshComponent::StaticClass())) : nullptr;
 		USkeletalMesh* kkw_configured_mesh = LoadMesh(kkw_spec.kkw_mesh_path);
@@ -97,6 +98,11 @@ void AFPSJanggiAbilityPlayerController::BuildPlayablePieces()
 			continue;
 		}
 
+		const FString kkw_piece_actor_label = FString::Printf(TEXT("FPSJanggiAbilityCharacter%d"), kkw_spawn_index);
+#if WITH_EDITOR
+		kkw_piece->SetActorLabel(kkw_piece_actor_label);
+#endif
+		kkw_piece->Tags.AddUnique(FName(*kkw_piece_actor_label));
 		kkw_piece->ConfigurePiece(kkw_spec.kkw_role, kkw_mesh, kkw_spawn_transform, kkw_b_use_source_placement);
 		kkw_piece->ConfigureAnimations(
 			LoadAnimation(kkw_spec.kkw_idle_animation_path),

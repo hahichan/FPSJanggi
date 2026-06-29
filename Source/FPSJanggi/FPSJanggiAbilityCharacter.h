@@ -13,6 +13,7 @@ class UCameraComponent;
 class USoundBase;
 class USpringArmComponent;
 class USkeletalMeshComponent;
+class UStaticMeshComponent;
 
 UENUM(BlueprintType)
 enum class EFPSJanggiPieceRole : uint8
@@ -51,6 +52,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "kkw_viewmodel")
 	TObjectPtr<USkeletalMeshComponent> kkw_first_person_mesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "kkw_viewmodel")
+	TObjectPtr<UStaticMeshComponent> kkw_left_fist_mesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "kkw_viewmodel")
+	TObjectPtr<UStaticMeshComponent> kkw_right_fist_mesh;
 
 	UPROPERTY(EditDefaultsOnly, Category = "kkw_viewmodel")
 	float kkw_first_person_visual_scale = 10.0f;
@@ -170,6 +177,8 @@ protected:
 	void RefreshMovementAnimation();
 	void RefreshFirstPersonMeshTransform();
 	void RefreshFirstPersonMeshSections();
+	void RefreshFistViewmodelTransform();
+	void SetFistViewmodelVisible(bool kkw_b_visible);
 	void ApplyCameraMode();
 	void EndActionAnimation();
 };
