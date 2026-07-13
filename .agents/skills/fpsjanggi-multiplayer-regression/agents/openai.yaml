@@ -1,0 +1,4 @@
+interface:
+  display_name: "FPSJanggi Multiplayer Regression"
+  short_description: "Build and triage two-player Unreal multiplayer regressions"
+  default_prompt: "Use $fpsjanggi-multiplayer-regression to build FPSJanggi and compare a two-player server/client smoke test."

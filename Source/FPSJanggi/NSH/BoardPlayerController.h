@@ -1,0 +1,125 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#pragma once
+
+#include "AuthoritativeJanggiBoard.h"
+#include "CoreMinimal.h"
+#include "GameFramework/PlayerController.h"
+#include "BoardPlayerController.generated.h"
+
+class ACameraActor;
+class UArenaDebugWidget;
+class UBoardStatusWidget;
+class UFormationSelectionWidget;
+class UStaticMeshComponent;
+
+UCLASS(Blueprintable)
+class FPSJANGGI_API ABoardPlayerController : public APlayerController
+{
+	GENERATED_BODY()
+
+public:
+	ABoardPlayerController();
+
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	UFUNCTION(BlueprintCallable, Category = "FPS Janggi|Board")
+	void RequestBoardClick(const FVector& LocalPosition);
+
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Board")
+	EJanggiTeam GetAssignedBoardTeam() const { return AssignedBoardTeam; }
+
+	void SetAssignedBoardTeam(EJanggiTeam Team);
+	void RequestFormation(EJanggiFormation Formation);
+	void RequestDebugArenaWinner(EJanggiTeam WinnerTeam);
+
+	UFUNCTION(Client, Reliable)
+	void ClientBeginArenaTransition(
+		FVector ArenaFocusLocation,
+		FVector BlueFighterLocation,
+		FVector RedFighterLocation,
+		FVector BlueCameraLocation,
+		FVector RedCameraLocation,
+		float BlendSeconds);
+
+	UFUNCTION(Client, Reliable)
+	void ClientEndArenaTransition(float BlendSeconds);
+
+	UFUNCTION(Client, Reliable)
+	void ClientRunLateJoinSmokeCheck();
+
+	UFUNCTION(Client, Reliable)
+	void ClientShowLegalMoves(const TArray<int32>& BoardIndices);
+
+	UFUNCTION(Client, Reliable)
+	void ClientClearLegalMoves();
+
+	UFUNCTION(Client, Reliable)
+	void ClientShowBoardNotice(const FString& Message, bool bError);
+
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void TestBoardClick(int32 BoardX, int32 BoardY);
+
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void DumpBoardNetworkState();
+
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void ResolveTestBattle(bool bAttackerWins = true);
+
+	/** Development-only deterministic move used by headless multiplayer smoke tests. */
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void RunBoardSmokeTest();
+
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void RunArenaSmokeTest();
+
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void RunGeneralDefeatSmokeTest();
+
+protected:
+	UPROPERTY(ReplicatedUsing = OnRep_AssignedBoardTeam, BlueprintReadOnly, Category = "FPS Janggi|Board")
+	EJanggiTeam AssignedBoardTeam = EJanggiTeam::Unassigned;
+
+	UFUNCTION()
+	void OnRep_AssignedBoardTeam();
+
+	UFUNCTION(Server, Reliable)
+	void ServerRequestBoardClick(FVector_NetQuantize10 LocalPosition);
+
+	UFUNCTION(Server, Reliable)
+	void ServerRequestFormation(EJanggiFormation Formation);
+
+	UFUNCTION(Server, Reliable)
+	void ServerResolveDebugArenaWinner(EJanggiTeam WinnerTeam);
+
+private:
+	double LastServerBoardClickTimeSeconds = -1.0;
+	TWeakObjectPtr<AActor> PreviousViewTarget;
+	mutable TWeakObjectPtr<AAuthoritativeJanggiBoard> CachedBoard;
+	TWeakObjectPtr<ACameraActor> BoardCamera;
+	TWeakObjectPtr<ACameraActor> RuntimeBoardCamera;
+	TWeakObjectPtr<ACameraActor> ArenaCamera;
+	TWeakObjectPtr<UArenaDebugWidget> ArenaDebugWidget;
+	TWeakObjectPtr<UFormationSelectionWidget> FormationSelectionWidget;
+	TWeakObjectPtr<UBoardStatusWidget> BoardStatusWidget;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> LegalMoveWorldMarkers;
+	FTimerHandle BoardCameraSetupTimerHandle;
+	FTimerHandle BoardStatusRefreshTimerHandle;
+	int32 BoardCameraSetupAttempts = 0;
+	double BoardNoticeExpiresAtSeconds = -1.0;
+
+	AAuthoritativeJanggiBoard* FindAuthoritativeBoard() const;
+	void HandleBoardPointerClick(AAuthoritativeJanggiBoard* Board);
+	void ReplaceLegacyFormationWidget();
+	void CreateArenaDebugWidget();
+	void RemoveArenaDebugWidget();
+	void CreateBoardStatusWidget();
+	void RefreshBoardStatus();
+	void HideLegalMoveMarkers();
+	void ScheduleBoardCameraSetup();
+	void TrySetupBoardCamera();
+};

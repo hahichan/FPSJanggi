@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "5.7",
+	"EngineAssociation": "{0BDC276A-4003-50A1-1297-DBA06889C3DC}",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -71,6 +71,10 @@
 		},
 		{
 			"Name": "PCG",
+			"Enabled": true
+		},
+		{
+			"Name": "OnlineSubsystemSteam",
 			"Enabled": true
 		}
 	]
