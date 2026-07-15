@@ -70,7 +70,9 @@ void ABoardGameMode::PostLogin(APlayerController* NewPlayer)
 			}
 		}), 2.0f, false);
 	}
-	if (AssignedTeam == EJanggiTeam::Red && FParse::Param(FCommandLine::Get(), TEXT("GeneralSmokeTest")))
+	const bool bReturnLobbySmokeTest = FParse::Param(FCommandLine::Get(), TEXT("ReturnLobbySmokeTest"));
+	if (AssignedTeam == EJanggiTeam::Red &&
+		(FParse::Param(FCommandLine::Get(), TEXT("GeneralSmokeTest")) || bReturnLobbySmokeTest))
 	{
 		FTimerHandle GeneralTestTimer;
 		GetWorldTimerManager().SetTimer(GeneralTestTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
@@ -80,6 +82,19 @@ void ABoardGameMode::PostLogin(APlayerController* NewPlayer)
 				Host->RunGeneralDefeatSmokeTest();
 			}
 		}), 2.0f, false);
+
+		if (bReturnLobbySmokeTest)
+		{
+			FTimerHandle ReturnLobbyTestTimer;
+			GetWorldTimerManager().SetTimer(ReturnLobbyTestTimer, FTimerDelegate::CreateWeakLambda(this, [this]()
+			{
+				if (ABoardPlayerController* Host = Cast<ABoardPlayerController>(GetWorld()->GetFirstPlayerController()))
+				{
+					UE_LOG(LogTemp, Display, TEXT("BOARD_RETURN_TO_LOBBY_SMOKE_TEST requesting"));
+					Host->RequestReturnToLobby();
+				}
+			}), 4.0f, false);
+		}
 	}
 #endif
 }

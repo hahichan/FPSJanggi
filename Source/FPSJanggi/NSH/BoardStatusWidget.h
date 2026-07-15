@@ -8,6 +8,7 @@
 #include "BoardStatusWidget.generated.h"
 
 class UBorder;
+class UButton;
 class UCanvasPanel;
 class UTextBlock;
 
@@ -31,6 +32,9 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	UFUNCTION()
+	void ReturnToLobby();
+
 	UPROPERTY(Transient)
 	TObjectPtr<UBorder> StatusBorder;
 
@@ -38,7 +42,16 @@ private:
 	TObjectPtr<UCanvasPanel> StatusCanvas;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> EyebrowText;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> StatusText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> DetailText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UButton> ReturnLobbyButton;
 
 	FText LastStatusText;
 	FLinearColor LastStatusColor = FLinearColor::Transparent;

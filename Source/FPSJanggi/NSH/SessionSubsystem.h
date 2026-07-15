@@ -69,6 +69,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "NSH|Session")
 	void LeaveRoom();
 
+	/** Close the active online session if needed, then load MainMap as a standalone front-end lobby. */
+	UFUNCTION(BlueprintCallable, Category = "NSH|Session")
+	void ReturnToLobby();
+
 	UFUNCTION(BlueprintPure, Category = "NSH|Session")
 	bool IsBusy() const { return nsh_b_operation_in_progress; }
 
@@ -94,6 +98,7 @@ private:
 	bool nsh_b_quick_match_pending = false;
 	bool nsh_b_create_after_destroy = false;
 	bool nsh_b_join_after_destroy = false;
+	bool nsh_b_return_to_lobby_after_destroy = false;
 	bool nsh_b_pending_is_lan = false;
 	int32 nsh_pending_max_players = 2;
 	int32 nsh_pending_join_index = INDEX_NONE;
@@ -105,6 +110,7 @@ private:
 	void BeginJoinRoom(int32 nsh_room_index);
 	void BroadcastFailure(FName nsh_operation, const FString& nsh_message);
 	void ResetOperationState();
+	void CompleteReturnToLobby();
 
 	void HandleCreateSessionComplete(FName nsh_completed_session_name, bool nsh_b_was_successful);
 	void HandleFindSessionsComplete(bool nsh_b_was_successful);

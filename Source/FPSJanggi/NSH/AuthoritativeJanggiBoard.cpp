@@ -4,14 +4,22 @@
 
 #include "ArenaPlaceholderCharacter.h"
 #include "BoardPlayerController.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "Engine/World.h"
 #include "Engine/SkeletalMesh.h"
+#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/GameStateBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 #include "UObject/UnrealType.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "LevelEditorViewport.h"
+#endif
 
 namespace
 {
@@ -121,6 +129,8 @@ void AAuthoritativeJanggiBoard::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME(AAuthoritativeJanggiBoard, WinningTeam);
 	DOREPLIFETIME(AAuthoritativeJanggiBoard, BattleContext);
 	DOREPLIFETIME(AAuthoritativeJanggiBoard, TurnDeadlineServerTime);
+	DOREPLIFETIME(AAuthoritativeJanggiBoard, ArenaBlueCombatant);
+	DOREPLIFETIME(AAuthoritativeJanggiBoard, ArenaRedCombatant);
 }
 
 bool AAuthoritativeJanggiBoard::SubmitAuthoritativeClick(
@@ -454,9 +464,24 @@ AActor* AAuthoritativeJanggiBoard::SpawnAuthoritativePiece(int32 PieceValue, int
 	AActor* Piece = GetWorld()->SpawnActorDeferred<AActor>(
 		PieceClass, SpawnTransform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Piece) return nullptr;
+	// Board pieces are shared match state. Do not inherit owner-only relevancy from
+	// legacy Blueprint defaults: every connected player must receive every piece.
 	Piece->SetReplicates(true);
 	Piece->SetReplicateMovement(true);
+	Piece->bAlwaysRelevant = true;
+	Piece->bOnlyRelevantToOwner = false;
+	Piece->bNetUseOwnerRelevancy = false;
+	Piece->SetNetDormancy(DORM_Awake);
 	UGameplayStatics::FinishSpawningActor(Piece, SpawnTransform);
+	// A Blueprint construction script can change actor networking properties while
+	// FinishSpawningActor runs, so enforce the authoritative settings afterwards too.
+	Piece->SetReplicates(true);
+	Piece->SetReplicateMovement(true);
+	Piece->bAlwaysRelevant = true;
+	Piece->bOnlyRelevantToOwner = false;
+	Piece->bNetUseOwnerRelevancy = false;
+	Piece->SetNetDormancy(DORM_Awake);
+	Piece->ForceNetUpdate();
 	ApplyPieceVisualScale(Piece);
 	return Piece;
 }
@@ -591,8 +616,10 @@ void AAuthoritativeJanggiBoard::ResolveArenaBattle(EJanggiTeam WinnerTeam)
 			bAttackerRemoved ? TEXT("true") : TEXT("false"));
 	}
 
+	DestroyArenaCombatants();
+	// Unpossess/destroy first, then make the explicit board camera RPC the final
+	// local view operation. This prevents Pawn teardown from stealing the view.
 	NotifyArenaCamera(false);
-	DestroyArenaPlaceholderCharacters();
 	BattleContext = FBoardBattleContext();
 	if (bGeneralDefeated)
 	{
@@ -604,6 +631,41 @@ void AAuthoritativeJanggiBoard::ResolveArenaBattle(EJanggiTeam WinnerTeam)
 		StartTurn(CurrentTurnTeam == EJanggiTeam::Blue ? EJanggiTeam::Red : EJanggiTeam::Blue);
 	}
 	ForceNetUpdate();
+}
+
+void AAuthoritativeJanggiBoard::ReportArenaCombatantDefeated(AActor* DefeatedCombatant)
+{
+	if (!HasAuthority() || !DefeatedCombatant || !BattleContext.bActive ||
+		(MatchPhase != EBoardMatchPhase::ArenaBattle && MatchPhase != EBoardMatchPhase::ArenaTransition))
+	{
+		return;
+	}
+
+	EJanggiTeam DefeatedTeam = EJanggiTeam::Unassigned;
+	if (DefeatedCombatant == ArenaBlueCombatant || DefeatedCombatant->ActorHasTag(FName(TEXT("ArenaBlue"))))
+		DefeatedTeam = EJanggiTeam::Blue;
+	else if (DefeatedCombatant == ArenaRedCombatant || DefeatedCombatant->ActorHasTag(FName(TEXT("ArenaRed"))))
+		DefeatedTeam = EJanggiTeam::Red;
+	if (DefeatedTeam == EJanggiTeam::Unassigned)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("BOARD_ARENA_DEFEAT_REJECTED actor=%s reason=not_active_combatant"),
+			*GetNameSafe(DefeatedCombatant));
+		return;
+	}
+
+	const EJanggiTeam WinnerTeam = DefeatedTeam == EJanggiTeam::Blue
+		? EJanggiTeam::Red : EJanggiTeam::Blue;
+	UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_DEFEAT_REPORTED defeated=%s winner=%s actor=%s"),
+		*UEnum::GetValueAsString(DefeatedTeam), *UEnum::GetValueAsString(WinnerTeam),
+		*GetNameSafe(DefeatedCombatant));
+	ResolveArenaBattle(WinnerTeam);
+}
+
+AActor* AAuthoritativeJanggiBoard::GetArenaCombatant(EJanggiTeam Team) const
+{
+	if (Team == EJanggiTeam::Blue) return ArenaBlueCombatant;
+	if (Team == EJanggiTeam::Red) return ArenaRedCombatant;
+	return nullptr;
 }
 
 void AAuthoritativeJanggiBoard::FinishMatch(EJanggiTeam WinnerTeam)
@@ -687,6 +749,120 @@ FVector AAuthoritativeJanggiBoard::GetCellWorldPosition(int32 BoardIndex) const
 		return GetActorLocation();
 	}
 	return GetActorTransform().TransformPosition(GetCellLocalPosition(BoardIndex));
+}
+
+FVector AAuthoritativeJanggiBoard::GetLobbyCameraWorldLocation() const
+{
+	return GetActorTransform().TransformPosition(LobbyCameraOffset);
+}
+
+FVector AAuthoritativeJanggiBoard::GetLobbyCameraFocusWorldLocation() const
+{
+	return GetActorTransform().TransformPosition(LobbyCameraFocusOffset);
+}
+
+void AAuthoritativeJanggiBoard::CreateLobbyCameraFromOffsetHandles()
+{
+#if WITH_EDITOR
+	UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("LOBBY_CAMERA_CREATE_SKIPPED reason=not_editor_world"));
+		return;
+	}
+
+	Modify();
+	World->Modify();
+	ACameraActor* Camera = LobbyCameraActor;
+	if (IsValid(Camera))
+	{
+		Camera->Tags.AddUnique(TEXT("Lobby"));
+		Camera->MarkPackageDirty();
+		MarkPackageDirty();
+		UE_LOG(LogTemp, Display,
+			TEXT("LOBBY_CAMERA_CREATE_SKIPPED reason=already_exists actor=%s location=%s rotation=%s"),
+			*Camera->GetName(),
+			*Camera->GetActorLocation().ToCompactString(),
+			*Camera->GetActorRotation().ToCompactString());
+		return;
+	}
+
+	{
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Name = MakeUniqueObjectName(
+			GetLevel(), ACameraActor::StaticClass(), TEXT("FPSJanggiLobbyCamera"));
+		SpawnParameters.OverrideLevel = GetLevel();
+		SpawnParameters.ObjectFlags |= RF_Transactional;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		Camera = World->SpawnActor<ACameraActor>(ACameraActor::StaticClass(), FTransform::Identity, SpawnParameters);
+		if (!Camera)
+		{
+			UE_LOG(LogTemp, Error, TEXT("LOBBY_CAMERA_CREATE_FAILED board=%s"), *GetName());
+			return;
+		}
+		LobbyCameraActor = Camera;
+	}
+
+	Camera->Modify();
+	const FVector CameraLocation = GetLobbyCameraWorldLocation();
+	const FVector FocusLocation = GetLobbyCameraFocusWorldLocation();
+	Camera->SetActorLocationAndRotation(CameraLocation, (FocusLocation - CameraLocation).Rotation());
+	Camera->Tags.AddUnique(TEXT("Lobby"));
+	Camera->SetActorLabel(TEXT("FPSJanggi Lobby Camera"));
+	if (UCameraComponent* CameraComponent = Camera->GetCameraComponent())
+	{
+		CameraComponent->Modify();
+		CameraComponent->SetFieldOfView(LobbyCameraFieldOfView);
+	}
+	Camera->MarkPackageDirty();
+	MarkPackageDirty();
+	UE_LOG(LogTemp, Display,
+		TEXT("LOBBY_CAMERA_CREATED actor=%s location=%s rotation=%s fov=%.1f board=%s"),
+		*Camera->GetName(),
+		*Camera->GetActorLocation().ToCompactString(),
+		*Camera->GetActorRotation().ToCompactString(),
+		LobbyCameraFieldOfView,
+		*GetName());
+#endif
+}
+
+void AAuthoritativeJanggiBoard::SnapLobbyCameraToCurrentEditorView()
+{
+#if WITH_EDITOR
+	UWorld* World = GetWorld();
+	if (!World || World->IsGameWorld() || !GCurrentLevelEditingViewportClient)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("LOBBY_CAMERA_SNAP_SKIPPED reason=no_level_editor_viewport"));
+		return;
+	}
+
+	ACameraActor* Camera = LobbyCameraActor;
+	if (!IsValid(Camera))
+	{
+		CreateLobbyCameraFromOffsetHandles();
+		Camera = LobbyCameraActor;
+	}
+	if (!IsValid(Camera))
+	{
+		UE_LOG(LogTemp, Error, TEXT("LOBBY_CAMERA_SNAP_FAILED reason=no_lobby_camera board=%s"), *GetName());
+		return;
+	}
+
+	Modify();
+	Camera->Modify();
+	const FVector ViewLocation = GCurrentLevelEditingViewportClient->GetViewLocation();
+	const FRotator ViewRotation = GCurrentLevelEditingViewportClient->GetViewRotation();
+	Camera->SetActorLocationAndRotation(ViewLocation, ViewRotation);
+	Camera->Tags.AddUnique(TEXT("Lobby"));
+	Camera->MarkPackageDirty();
+	MarkPackageDirty();
+	UE_LOG(LogTemp, Display,
+		TEXT("LOBBY_CAMERA_SNAPPED actor=%s location=%s rotation=%s board=%s"),
+		*Camera->GetName(),
+		*ViewLocation.ToCompactString(),
+		*ViewRotation.ToCompactString(),
+		*GetName());
+#endif
 }
 
 TArray<int32> AAuthoritativeJanggiBoard::GetLegalDestinations(int32 FromIndex, EJanggiTeam Team) const
@@ -1042,6 +1218,7 @@ void AAuthoritativeJanggiBoard::CompleteBoardMove(int32 DestinationIndex)
 	}
 	MovingPiece->SetActorLocation(
 		GetActorTransform().TransformPosition(GetCellLocalPosition(DestinationIndex)), false, nullptr, ETeleportType::TeleportPhysics);
+	MovingPiece->ForceNetUpdate();
 	ClickHistory.Add(FVector_NetQuantize10(GetCellLocalPosition(DestinationIndex)));
 	if (LastMovedPiece.Get() == MovingPiece) ++ConsecutiveMovesForPiece;
 	else { LastMovedPiece = MovingPiece; ConsecutiveMovesForPiece = 1; }
@@ -1090,7 +1267,7 @@ void AAuthoritativeJanggiBoard::StartArenaBattle(int32 DestinationIndex)
 	BattleContext.DefenderType = GetPieceType(Defender);
 	BattleContext.Attacker = Attacker;
 	BattleContext.Defender = Defender;
-	SpawnArenaPlaceholderCharacters();
+	SpawnArenaCombatants();
 	OnArenaBattleStarted(BattleContext);
 	UE_LOG(LogTemp, Display, TEXT("BOARD_BATTLE_STARTED attacker=%s from=%d to=%d"),
 		*UEnum::GetValueAsString(BattleContext.AttackerTeam), BattleContext.OriginIndex, BattleContext.DestinationIndex);
@@ -1191,14 +1368,62 @@ const TCHAR* GetArenaCharacterMeshPath(EJanggiTeam Team, EJanggiPieceType Type)
 }
 }
 
-void AAuthoritativeJanggiBoard::SpawnArenaPlaceholderCharacters()
+void AAuthoritativeJanggiBoard::SpawnArenaCombatants()
 {
 	if (!HasAuthority() || !GetWorld() || !BattleContext.bActive) return;
-	DestroyArenaPlaceholderCharacters();
+	DestroyArenaCombatants();
 	const EJanggiTeam DefenderTeam = BattleContext.AttackerTeam == EJanggiTeam::Blue
 		? EJanggiTeam::Red : EJanggiTeam::Blue;
 
-	auto SpawnCharacter = [this](EJanggiTeam Team, EJanggiPieceType Type) -> AArenaPlaceholderCharacter*
+	if (BattleContext.AttackerTeam == EJanggiTeam::Blue)
+	{
+		ArenaBlueCombatant = SpawnArenaCombatant(EJanggiTeam::Blue, BattleContext.AttackerType);
+		ArenaRedCombatant = SpawnArenaCombatant(EJanggiTeam::Red, BattleContext.DefenderType);
+	}
+	else
+	{
+		ArenaRedCombatant = SpawnArenaCombatant(EJanggiTeam::Red, BattleContext.AttackerType);
+		ArenaBlueCombatant = SpawnArenaCombatant(EJanggiTeam::Blue, BattleContext.DefenderType);
+	}
+	PossessArenaCombatant(EJanggiTeam::Blue, ArenaBlueCombatant);
+	PossessArenaCombatant(EJanggiTeam::Red, ArenaRedCombatant);
+	UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_CHARACTERS_SPAWNED center=%s blue=%s red=%s"),
+		*GetArenaCenterWorldLocation().ToCompactString(),
+		*GetArenaFighterWorldLocation(EJanggiTeam::Blue).ToCompactString(),
+		*GetArenaFighterWorldLocation(EJanggiTeam::Red).ToCompactString());
+}
+
+AActor* AAuthoritativeJanggiBoard::SpawnArenaCombatant(EJanggiTeam Team, EJanggiPieceType Type)
+{
+	const TMap<EJanggiPieceType, TSubclassOf<APawn>>& ClassMap = Team == EJanggiTeam::Blue
+		? BlueArenaCombatantClasses : RedArenaCombatantClasses;
+	const TSubclassOf<APawn>* ConfiguredClass = ClassMap.Find(Type);
+	const FVector Location = GetArenaFighterWorldLocation(Team);
+	const EJanggiTeam OpponentTeam = Team == EJanggiTeam::Blue ? EJanggiTeam::Red : EJanggiTeam::Blue;
+	const FVector OpponentLocation = GetArenaFighterWorldLocation(OpponentTeam);
+	const FTransform Transform((OpponentLocation - Location).Rotation(), Location, FVector(ArenaPlaceholderScale));
+
+	AActor* Combatant = nullptr;
+	if (ConfiguredClass && ConfiguredClass->Get())
+	{
+		APawn* Pawn = GetWorld()->SpawnActorDeferred<APawn>(
+			ConfiguredClass->Get(), Transform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (Pawn)
+		{
+			Pawn->SetReplicates(true);
+			Pawn->SetReplicateMovement(true);
+			Pawn->bAlwaysRelevant = true;
+			Pawn->bOnlyRelevantToOwner = false;
+			Pawn->bNetUseOwnerRelevancy = false;
+			UGameplayStatics::FinishSpawningActor(Pawn, Transform);
+			Pawn->ForceNetUpdate();
+			Combatant = Pawn;
+			UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_COMBATANT_CLASS team=%s type=%s class=%s mode=configured_pawn"),
+				*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type), *GetNameSafe(ConfiguredClass->Get()));
+		}
+	}
+
+	if (!Combatant)
 	{
 		const TCHAR* MeshPath = GetArenaCharacterMeshPath(Team, Type);
 		USkeletalMesh* Mesh = MeshPath ? LoadObject<USkeletalMesh>(nullptr, MeshPath) : nullptr;
@@ -1208,40 +1433,67 @@ void AAuthoritativeJanggiBoard::SpawnArenaPlaceholderCharacters()
 				*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type));
 			return nullptr;
 		}
-		const FVector Location = GetArenaFighterWorldLocation(Team);
-		const FVector OpponentLocation = GetArenaFighterWorldLocation(Team == EJanggiTeam::Blue ? EJanggiTeam::Red : EJanggiTeam::Blue);
-		FTransform Transform((OpponentLocation - Location).Rotation(), Location, FVector(ArenaPlaceholderScale));
-		AArenaPlaceholderCharacter* Character = GetWorld()->SpawnActorDeferred<AArenaPlaceholderCharacter>(
+		AArenaPlaceholderCharacter* Placeholder = GetWorld()->SpawnActorDeferred<AArenaPlaceholderCharacter>(
 			AArenaPlaceholderCharacter::StaticClass(), Transform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-		if (!Character) return nullptr;
-		Character->Tags.Add(Team == EJanggiTeam::Blue ? FName(TEXT("ArenaBlue")) : FName(TEXT("ArenaRed")));
-		Character->SetCharacterMesh(Mesh);
-		UGameplayStatics::FinishSpawningActor(Character, Transform);
-		return Character;
-	};
+		if (!Placeholder) return nullptr;
+		Placeholder->SetCharacterMesh(Mesh);
+		UGameplayStatics::FinishSpawningActor(Placeholder, Transform);
+		Combatant = Placeholder;
+		UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_COMBATANT_CLASS team=%s type=%s mode=placeholder"),
+			*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type));
+	}
 
-	if (BattleContext.AttackerTeam == EJanggiTeam::Blue)
-	{
-		ArenaBlueCharacter = SpawnCharacter(EJanggiTeam::Blue, BattleContext.AttackerType);
-		ArenaRedCharacter = SpawnCharacter(EJanggiTeam::Red, BattleContext.DefenderType);
-	}
-	else
-	{
-		ArenaRedCharacter = SpawnCharacter(EJanggiTeam::Red, BattleContext.AttackerType);
-		ArenaBlueCharacter = SpawnCharacter(EJanggiTeam::Blue, BattleContext.DefenderType);
-	}
-	UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_CHARACTERS_SPAWNED center=%s blue=%s red=%s"),
-		*GetArenaCenterWorldLocation().ToCompactString(),
-		*GetArenaFighterWorldLocation(EJanggiTeam::Blue).ToCompactString(),
-		*GetArenaFighterWorldLocation(EJanggiTeam::Red).ToCompactString());
+	Combatant->Tags.AddUnique(FName(TEXT("ArenaCombatant")));
+	Combatant->Tags.AddUnique(Team == EJanggiTeam::Blue ? FName(TEXT("ArenaBlue")) : FName(TEXT("ArenaRed")));
+	const FString PieceTypeName = StaticEnum<EJanggiPieceType>()->GetNameStringByValue(static_cast<int64>(Type));
+	Combatant->Tags.AddUnique(FName(*FString::Printf(TEXT("ArenaPiece_%s"), *PieceTypeName)));
+	Combatant->OnDestroyed.AddDynamic(this, &AAuthoritativeJanggiBoard::HandleArenaCombatantDestroyed);
+	return Combatant;
 }
 
-void AAuthoritativeJanggiBoard::DestroyArenaPlaceholderCharacters()
+void AAuthoritativeJanggiBoard::PossessArenaCombatant(EJanggiTeam Team, AActor* Combatant)
 {
-	if (ArenaBlueCharacter.IsValid()) ArenaBlueCharacter->Destroy();
-	if (ArenaRedCharacter.IsValid()) ArenaRedCharacter->Destroy();
-	ArenaBlueCharacter.Reset();
-	ArenaRedCharacter.Reset();
+	APawn* Pawn = Cast<APawn>(Combatant);
+	if (!Pawn) return;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (ABoardPlayerController* Controller = Cast<ABoardPlayerController>(It->Get()))
+		{
+			if (Controller->GetAssignedBoardTeam() == Team)
+			{
+				Controller->Possess(Pawn);
+				UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_COMBATANT_POSSESSED team=%s controller=%s pawn=%s"),
+					*UEnum::GetValueAsString(Team), *GetNameSafe(Controller), *GetNameSafe(Pawn));
+				return;
+			}
+		}
+	}
+}
+
+void AAuthoritativeJanggiBoard::DestroyArenaCombatants()
+{
+	bDestroyingArenaCombatants = true;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (APlayerController* Controller = It->Get())
+		{
+			if (Controller->GetPawn() == ArenaBlueCombatant || Controller->GetPawn() == ArenaRedCombatant)
+			{
+				Controller->UnPossess();
+			}
+		}
+	}
+	if (IsValid(ArenaBlueCombatant)) ArenaBlueCombatant->Destroy();
+	if (IsValid(ArenaRedCombatant)) ArenaRedCombatant->Destroy();
+	ArenaBlueCombatant = nullptr;
+	ArenaRedCombatant = nullptr;
+	bDestroyingArenaCombatants = false;
+}
+
+void AAuthoritativeJanggiBoard::HandleArenaCombatantDestroyed(AActor* DestroyedActor)
+{
+	if (bDestroyingArenaCombatants || !HasAuthority() || !BattleContext.bActive) return;
+	ReportArenaCombatantDefeated(DestroyedActor);
 }
 
 bool AAuthoritativeJanggiBoard::FindFirstLegalNonCaptureMove(

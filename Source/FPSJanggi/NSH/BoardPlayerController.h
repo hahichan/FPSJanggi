@@ -11,6 +11,8 @@ class ACameraActor;
 class UArenaDebugWidget;
 class UBoardStatusWidget;
 class UFormationSelectionWidget;
+class ULobbyWidget;
+class UMaterialInstanceDynamic;
 class UStaticMeshComponent;
 
 UCLASS(Blueprintable)
@@ -35,6 +37,8 @@ public:
 	void SetAssignedBoardTeam(EJanggiTeam Team);
 	void RequestFormation(EJanggiFormation Formation);
 	void RequestDebugArenaWinner(EJanggiTeam WinnerTeam);
+	void RequestReturnToLobby();
+	void ExitLobbyForLocalPreview();
 
 	UFUNCTION(Client, Reliable)
 	void ClientBeginArenaTransition(
@@ -48,6 +52,14 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientEndArenaTransition(float BlendSeconds);
 
+	/** Local presentation hook for HUD, cracked-glass effects, BGM, and SFX. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "FPS Janggi|Arena|Presentation")
+	void OnArenaPresentationStarted(EJanggiTeam LocalTeam);
+
+	/** Local presentation hook fired after the board camera starts returning. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "FPS Janggi|Arena|Presentation")
+	void OnArenaPresentationEnded(EJanggiTeam LocalTeam);
+
 	UFUNCTION(Client, Reliable)
 	void ClientRunLateJoinSmokeCheck();
 
@@ -59,6 +71,9 @@ public:
 
 	UFUNCTION(Client, Reliable)
 	void ClientShowBoardNotice(const FString& Message, bool bError);
+
+	UFUNCTION(Client, Reliable)
+	void ClientReturnToLobby();
 
 	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
 	void TestBoardClick(int32 BoardX, int32 BoardY);
@@ -95,6 +110,9 @@ protected:
 	UFUNCTION(Server, Reliable)
 	void ServerResolveDebugArenaWinner(EJanggiTeam WinnerTeam);
 
+	UFUNCTION(Server, Reliable)
+	void ServerRequestReturnToLobby();
+
 private:
 	double LastServerBoardClickTimeSeconds = -1.0;
 	TWeakObjectPtr<AActor> PreviousViewTarget;
@@ -102,15 +120,25 @@ private:
 	TWeakObjectPtr<ACameraActor> BoardCamera;
 	TWeakObjectPtr<ACameraActor> RuntimeBoardCamera;
 	TWeakObjectPtr<ACameraActor> ArenaCamera;
+	TWeakObjectPtr<ACameraActor> LobbyCamera;
 	TWeakObjectPtr<UArenaDebugWidget> ArenaDebugWidget;
 	TWeakObjectPtr<UFormationSelectionWidget> FormationSelectionWidget;
 	TWeakObjectPtr<UBoardStatusWidget> BoardStatusWidget;
+	TWeakObjectPtr<ULobbyWidget> LobbyWidget;
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UStaticMeshComponent>> LegalMoveWorldMarkers;
+	TArray<TObjectPtr<UStaticMeshComponent>> LegalMoveOuterMarkerPool;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> LegalMoveInnerMarkerPool;
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> LegalMoveOuterMaterial = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> LegalMoveInnerMaterial = nullptr;
 	FTimerHandle BoardCameraSetupTimerHandle;
 	FTimerHandle BoardStatusRefreshTimerHandle;
 	int32 BoardCameraSetupAttempts = 0;
 	double BoardNoticeExpiresAtSeconds = -1.0;
+	bool bFrontEndLobby = false;
+	bool bOwnsRuntimeLobbyCamera = false;
 
 	AAuthoritativeJanggiBoard* FindAuthoritativeBoard() const;
 	void HandleBoardPointerClick(AAuthoritativeJanggiBoard* Board);
@@ -119,6 +147,11 @@ private:
 	void RemoveArenaDebugWidget();
 	void CreateBoardStatusWidget();
 	void RefreshBoardStatus();
+	bool ShouldShowFrontEndLobby() const;
+	void CreateLobbyWidget();
+	void RemoveLobbyWidget();
+	void SetupLobbyCamera();
+	bool EnsureLegalMoveMarkerPool(AAuthoritativeJanggiBoard* Board, int32 RequiredDestinations);
 	void HideLegalMoveMarkers();
 	void ScheduleBoardCameraSetup();
 	void TrySetupBoardCamera();

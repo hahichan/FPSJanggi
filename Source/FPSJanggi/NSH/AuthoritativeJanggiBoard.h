@@ -9,6 +9,8 @@
 class APlayerController;
 class ABoardPlayerController;
 class AArenaPlaceholderCharacter;
+class ACameraActor;
+class APawn;
 
 UENUM(BlueprintType)
 enum class EJanggiTeam : uint8
@@ -105,6 +107,17 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena")
 	void ResolveArenaBattle(EJanggiTeam WinnerTeam);
 
+	/**
+	 * Server-side integration point for a combat character's health/death system.
+	 * Passing either active arena combatant resolves the battle for the other team.
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena|Integration")
+	void ReportArenaCombatantDefeated(AActor* DefeatedCombatant);
+
+	/** Returns the currently spawned arena actor for UI, health, and ability integration. */
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Arena|Integration")
+	AActor* GetArenaCombatant(EJanggiTeam Team) const;
+
 	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Board")
 	bool IsBoardInputPaused() const { return bBoardInputPaused; }
 
@@ -128,6 +141,28 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Board")
 	FVector GetCellWorldPosition(int32 BoardIndex) const;
+
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Lobby")
+	FVector GetLobbyCameraWorldLocation() const;
+
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Lobby")
+	FVector GetLobbyCameraFocusWorldLocation() const;
+
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Lobby")
+	float GetLobbyCameraFieldOfView() const { return LobbyCameraFieldOfView; }
+
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Lobby")
+	ACameraActor* GetLobbyCameraActor() const { return LobbyCameraActor; }
+
+	/** Converts the two legacy placement handles into a real, previewable level camera. */
+	UFUNCTION(CallInEditor, Category = "FPS Janggi|Lobby|Placement",
+		meta = (DisplayName = "Create Lobby Camera From Offset Handles"))
+	void CreateLobbyCameraFromOffsetHandles();
+
+	/** Copies the active level editor viewport transform to the saved lobby camera. */
+	UFUNCTION(CallInEditor, Category = "FPS Janggi|Lobby|Placement",
+		meta = (DisplayName = "Snap Lobby Camera To Current Editor View"))
+	void SnapLobbyCameraToCurrentEditorView();
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "FPS Janggi|Arena")
 	void OnArenaBattleStarted(const FBoardBattleContext& Context);
@@ -153,6 +188,22 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "FPS Janggi|Board", meta = (ClampMin = "0.01"))
 	float PieceSpawnScale = 1.8f;
 
+	/** Optional placed camera. Its saved transform and FOV are used exactly when assigned. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Lobby|Placement")
+	TObjectPtr<ACameraActor> LobbyCameraActor = nullptr;
+
+	/** Fallback lobby camera controls used only when LobbyCameraActor is not assigned. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Lobby|Placement",
+		meta = (MakeEditWidget = true, EditCondition = "LobbyCameraActor == nullptr", EditConditionHides))
+	FVector LobbyCameraOffset = FVector(36.0, 34.0, 82.0);
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Lobby|Placement",
+		meta = (MakeEditWidget = true, EditCondition = "LobbyCameraActor == nullptr", EditConditionHides))
+	FVector LobbyCameraFocusOffset = FVector(36.0, 34.0, 0.0);
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Lobby|Placement", meta = (ClampMin = "20.0", ClampMax = "120.0"))
+	float LobbyCameraFieldOfView = 58.0f;
+
 	/** Select the placed JanggiBoard1 actor to move these five points with viewport gizmos. */
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Placement", meta = (MakeEditWidget = true))
 	FVector ArenaBlueSpawnOffset = FVector(-650.0, 1800.0, 200.0);
@@ -171,6 +222,16 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "FPS Janggi|Arena", meta = (ClampMin = "0.01"))
 	float ArenaPlaceholderScale = 1.0f;
+
+	/**
+	 * Optional real combat Pawn classes, keyed by board-piece type. Leave an entry
+	 * empty to retain the existing visual-only placeholder for that piece.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Integration")
+	TMap<EJanggiPieceType, TSubclassOf<APawn>> BlueArenaCombatantClasses;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Integration")
+	TMap<EJanggiPieceType, TSubclassOf<APawn>> RedArenaCombatantClasses;
 
 	UPROPERTY(ReplicatedUsing = OnRep_ClickHistory)
 	TArray<FVector_NetQuantize10> ClickHistory;
@@ -215,9 +276,12 @@ private:
 	FTimerHandle ArenaBattleTimerHandle;
 	FTimerHandle PieceSynchronizationTimerHandle;
 	FTimerHandle PieceVisualSynchronizationTimerHandle;
-	TWeakObjectPtr<AArenaPlaceholderCharacter> ArenaBlueCharacter;
-	TWeakObjectPtr<AArenaPlaceholderCharacter> ArenaRedCharacter;
+	UPROPERTY(Replicated)
+	TObjectPtr<AActor> ArenaBlueCombatant = nullptr;
+	UPROPERTY(Replicated)
+	TObjectPtr<AActor> ArenaRedCombatant = nullptr;
 	int32 PieceVisualSynchronizationAttempts = 0;
+	bool bDestroyingArenaCombatants = false;
 
 	bool IsValidBoardLocalPosition(const FVector& LocalPosition) const;
 	int32 GetBoardIndex(const FVector& SanitizedLocalPosition) const;
@@ -253,7 +317,11 @@ private:
 	FVector GetArenaFighterWorldLocation(EJanggiTeam Team) const;
 	FVector GetArenaCameraWorldLocation(EJanggiTeam Team) const;
 	FVector GetArenaCameraFocusWorldLocation() const;
-	void SpawnArenaPlaceholderCharacters();
-	void DestroyArenaPlaceholderCharacters();
+	void SpawnArenaCombatants();
+	AActor* SpawnArenaCombatant(EJanggiTeam Team, EJanggiPieceType Type);
+	void PossessArenaCombatant(EJanggiTeam Team, AActor* Combatant);
+	void DestroyArenaCombatants();
+	UFUNCTION()
+	void HandleArenaCombatantDestroyed(AActor* DestroyedActor);
 	bool FindFirstLegalNonCaptureMove(EJanggiTeam Team, int32& OutFromIndex, int32& OutToIndex) const;
 };

@@ -4,7 +4,9 @@
 
 #include "AuthoritativeJanggiBoard.h"
 #include "BoardPlayerController.h"
+#include "JanggiUIStyle.h"
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
@@ -16,17 +18,44 @@
 
 namespace
 {
-UButton* AddFormationButton(UWidgetTree* WidgetTree, UHorizontalBox* Row, const FString& Label)
+UButton* AddFormationButton(
+	UWidgetTree* WidgetTree,
+	UHorizontalBox* Row,
+	const FString& Label,
+	const FString& Description,
+	int32 Number)
 {
 	UButton* Button = WidgetTree->ConstructWidget<UButton>();
+	FPSJanggiUI::StyleButton(
+		Button,
+		FLinearColor(0.11f, 0.085f, 0.052f, 1.0f),
+		FLinearColor(0.19f, 0.135f, 0.065f, 1.0f),
+		FLinearColor(0.075f, 0.055f, 0.035f, 1.0f),
+		11.0f,
+		FLinearColor(0.32f, 0.24f, 0.12f, 1.0f));
+	UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>();
+	Button->AddChild(Content);
+	UTextBlock* NumberText = WidgetTree->ConstructWidget<UTextBlock>();
+	NumberText->SetText(FText::FromString(FString::Printf(TEXT("진형 %d"), Number)));
+	NumberText->SetJustification(ETextJustify::Center);
+	FPSJanggiUI::StyleText(NumberText, 12, FPSJanggiUI::Gold(), true);
+	Content->AddChildToVerticalBox(NumberText);
 	UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>();
 	Text->SetText(FText::FromString(Label));
 	Text->SetJustification(ETextJustify::Center);
-	Text->SetFont(FSlateFontInfo(Text->GetFont().FontObject, 24));
-	Button->AddChild(Text);
+	FPSJanggiUI::StyleText(Text, 23, FPSJanggiUI::Ivory(), true);
+	if (UVerticalBoxSlot* TextSlot = Content->AddChildToVerticalBox(Text))
+	{
+		TextSlot->SetPadding(FMargin(0.0f, 3.0f));
+	}
+	UTextBlock* Hint = WidgetTree->ConstructWidget<UTextBlock>();
+	Hint->SetText(FText::FromString(Description));
+	Hint->SetJustification(ETextJustify::Center);
+	FPSJanggiUI::StyleText(Hint, 12, FPSJanggiUI::MutedIvory());
+	Content->AddChildToVerticalBox(Hint);
 	if (UHorizontalBoxSlot* Slot = Row->AddChildToHorizontalBox(Button))
 	{
-		Slot->SetPadding(FMargin(8.0f));
+		Slot->SetPadding(FMargin(7.0f));
 		Slot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		Slot->SetHorizontalAlignment(HAlign_Fill);
 		Slot->SetVerticalAlignment(VAlign_Fill);
@@ -42,22 +71,39 @@ TSharedRef<SWidget> UFormationSelectionWidget::RebuildWidget()
 
 	UCanvasPanel* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>();
 	WidgetTree->RootWidget = Canvas;
+	UBorder* Background = WidgetTree->ConstructWidget<UBorder>();
+	FPSJanggiUI::StylePanel(
+		Background,
+		FLinearColor(0.022f, 0.018f, 0.014f, 0.95f),
+		18.0f,
+		FLinearColor(0.42f, 0.30f, 0.13f, 0.95f),
+		1.5f);
+	Background->SetPadding(FMargin(20.0f, 14.0f, 20.0f, 18.0f));
+	UCanvasPanelSlot* BackgroundSlot = Canvas->AddChildToCanvas(Background);
+	BackgroundSlot->SetAnchors(FAnchors(0.5f, 1.0f));
+	BackgroundSlot->SetAlignment(FVector2D(0.5f, 1.0f));
+	BackgroundSlot->SetPosition(FVector2D(0.0f, -24.0f));
+	BackgroundSlot->SetSize(FVector2D(1050.0f, 210.0f));
 	UVerticalBox* Panel = WidgetTree->ConstructWidget<UVerticalBox>();
-	UCanvasPanelSlot* PanelSlot = Canvas->AddChildToCanvas(Panel);
-	PanelSlot->SetAnchors(FAnchors(0.5f, 1.0f));
-	PanelSlot->SetAlignment(FVector2D(0.5f, 1.0f));
-	PanelSlot->SetPosition(FVector2D(0.0f, -28.0f));
-	PanelSlot->SetSize(FVector2D(920.0f, 130.0f));
+	Background->SetContent(Panel);
 
 	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
-	Title->SetText(FText::FromString(TEXT("진형을 선택하세요")));
+	Title->SetText(FText::FromString(TEXT("초기 진형 선택")));
 	Title->SetJustification(ETextJustify::Center);
-	Title->SetColorAndOpacity(FSlateColor(FLinearColor::White));
-	Title->SetFont(FSlateFontInfo(Title->GetFont().FontObject, 28));
+	FPSJanggiUI::StyleText(Title, 27, FPSJanggiUI::Ivory(), true);
 	if (UVerticalBoxSlot* TitleSlot = Panel->AddChildToVerticalBox(Title))
 	{
-		TitleSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 6.0f));
+		TitleSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 1.0f));
 		TitleSlot->SetHorizontalAlignment(HAlign_Fill);
+	}
+	UTextBlock* Subtitle = WidgetTree->ConstructWidget<UTextBlock>();
+	Subtitle->SetText(FText::FromString(TEXT("양쪽 끝의 마(馬)와 상(象) 배치를 선택하세요 · 진영 방향은 바뀌지 않습니다")));
+	Subtitle->SetJustification(ETextJustify::Center);
+	FPSJanggiUI::StyleText(Subtitle, 14, FPSJanggiUI::MutedIvory());
+	if (UVerticalBoxSlot* SubtitleSlot = Panel->AddChildToVerticalBox(Subtitle))
+	{
+		SubtitleSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 7.0f));
+		SubtitleSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
@@ -67,13 +113,13 @@ TSharedRef<SWidget> UFormationSelectionWidget::RebuildWidget()
 		RowSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 
-	AddFormationButton(WidgetTree, Row, TEXT("마-상-상-마"))->OnClicked.AddDynamic(
+	AddFormationButton(WidgetTree, Row, TEXT("마 · 상 │ 상 · 마"), TEXT("양끝에 마 배치"), 1)->OnClicked.AddDynamic(
 		this, &UFormationSelectionWidget::SelectHorseElephantElephantHorse);
-	AddFormationButton(WidgetTree, Row, TEXT("마-상-마-상"))->OnClicked.AddDynamic(
+	AddFormationButton(WidgetTree, Row, TEXT("마 · 상 │ 마 · 상"), TEXT("좌우 교차 배치"), 2)->OnClicked.AddDynamic(
 		this, &UFormationSelectionWidget::SelectHorseElephantHorseElephant);
-	AddFormationButton(WidgetTree, Row, TEXT("상-마-상-마"))->OnClicked.AddDynamic(
+	AddFormationButton(WidgetTree, Row, TEXT("상 · 마 │ 상 · 마"), TEXT("반대 교차 배치"), 3)->OnClicked.AddDynamic(
 		this, &UFormationSelectionWidget::SelectElephantHorseElephantHorse);
-	AddFormationButton(WidgetTree, Row, TEXT("상-마-마-상"))->OnClicked.AddDynamic(
+	AddFormationButton(WidgetTree, Row, TEXT("상 · 마 │ 마 · 상"), TEXT("양끝에 상 배치"), 4)->OnClicked.AddDynamic(
 		this, &UFormationSelectionWidget::SelectElephantHorseHorseElephant);
 	return Super::RebuildWidget();
 }

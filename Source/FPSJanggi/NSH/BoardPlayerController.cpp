@@ -11,6 +11,7 @@
 #include "FormationSelectionWidget.h"
 #include "Engine/World.h"
 #include "InputCoreTypes.h"
+#include "LobbyWidget.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
@@ -18,6 +19,9 @@
 #include "TimerManager.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "SessionSubsystem.h"
 
 ABoardPlayerController::ABoardPlayerController()
 {
@@ -32,6 +36,21 @@ void ABoardPlayerController::BeginPlay()
 	Super::BeginPlay();
 	if (IsLocalController())
 	{
+		bFrontEndLobby = ShouldShowFrontEndLobby();
+		if (bFrontEndLobby)
+		{
+			GetWorldTimerManager().ClearTimer(BoardCameraSetupTimerHandle);
+			// MainMap's legacy Blueprint creates InterFace_MS during its own BeginPlay.
+			// Remove it now and once more after Blueprint startup so its formation
+			// buttons never remain visible behind the front-end lobby.
+			ReplaceLegacyFormationWidget();
+			FTimerHandle LegacyLobbyWidgetTimer;
+			GetWorldTimerManager().SetTimer(
+				LegacyLobbyWidgetTimer, this, &ABoardPlayerController::ReplaceLegacyFormationWidget, 0.15f, false);
+			CreateLobbyWidget();
+			SetupLobbyCamera();
+			return;
+		}
 		// A remote client can receive its team before MainMap's placed camera actors
 		// are ready. Retry locally instead of falling back to the pawn camera.
 		bAutoManageActiveCameraTarget = false;
@@ -55,7 +74,26 @@ void ABoardPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(BoardCameraSetupTimerHandle);
 	GetWorldTimerManager().ClearTimer(BoardStatusRefreshTimerHandle);
 	HideLegalMoveMarkers();
+	for (UStaticMeshComponent* Marker : LegalMoveOuterMarkerPool)
+	{
+		if (IsValid(Marker)) Marker->DestroyComponent();
+	}
+	for (UStaticMeshComponent* Marker : LegalMoveInnerMarkerPool)
+	{
+		if (IsValid(Marker)) Marker->DestroyComponent();
+	}
+	LegalMoveOuterMarkerPool.Reset();
+	LegalMoveInnerMarkerPool.Reset();
+	LegalMoveOuterMaterial = nullptr;
+	LegalMoveInnerMaterial = nullptr;
 	RemoveArenaDebugWidget();
+	RemoveLobbyWidget();
+	if (LobbyCamera.IsValid() && bOwnsRuntimeLobbyCamera)
+	{
+		LobbyCamera->Destroy();
+	}
+	LobbyCamera.Reset();
+	bOwnsRuntimeLobbyCamera = false;
 	if (RuntimeBoardCamera.IsValid())
 	{
 		RuntimeBoardCamera->Destroy();
@@ -74,6 +112,7 @@ bool ABoardPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
 	if (Params.Key == EKeys::LeftMouseButton && Params.Event == IE_Pressed && IsLocalController())
 	{
+		if (bFrontEndLobby) return Super::InputKey(Params);
 		if (AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard())
 		{
 			HandleBoardPointerClick(Board);
@@ -96,8 +135,11 @@ void ABoardPlayerController::SetAssignedBoardTeam(EJanggiTeam Team)
 		ForceNetUpdate();
 		if (IsLocalController())
 		{
-			ScheduleBoardCameraSetup();
-			ReplaceLegacyFormationWidget();
+			if (!ShouldShowFrontEndLobby())
+			{
+				ScheduleBoardCameraSetup();
+				ReplaceLegacyFormationWidget();
+			}
 		}
 	}
 }
@@ -120,12 +162,45 @@ void ABoardPlayerController::RequestDebugArenaWinner(EJanggiTeam WinnerTeam)
 #endif
 }
 
+void ABoardPlayerController::RequestReturnToLobby()
+{
+	if (IsLocalController())
+	{
+		ServerRequestReturnToLobby();
+	}
+}
+
+void ABoardPlayerController::ExitLobbyForLocalPreview()
+{
+#if !UE_BUILD_SHIPPING
+	if (!IsLocalController()) return;
+	bFrontEndLobby = false;
+	RemoveLobbyWidget();
+	if (LobbyCamera.IsValid() && bOwnsRuntimeLobbyCamera)
+	{
+		LobbyCamera->Destroy();
+	}
+	LobbyCamera.Reset();
+	bOwnsRuntimeLobbyCamera = false;
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+	CreateBoardStatusWidget();
+	ScheduleBoardCameraSetup();
+	ReplaceLegacyFormationWidget();
+	UE_LOG(LogTemp, Display, TEXT("LOBBY_LOCAL_PREVIEW_STARTED team=%s"), *UEnum::GetValueAsString(AssignedBoardTeam));
+#endif
+}
+
 void ABoardPlayerController::OnRep_AssignedBoardTeam()
 {
 	if (IsLocalController())
 	{
-		ScheduleBoardCameraSetup();
-		ReplaceLegacyFormationWidget();
+		if (!ShouldShowFrontEndLobby())
+		{
+			ScheduleBoardCameraSetup();
+			ReplaceLegacyFormationWidget();
+		}
 	}
 }
 
@@ -152,6 +227,7 @@ void ABoardPlayerController::ClientBeginArenaTransition_Implementation(
 		ArenaCamera->GetCameraComponent()->SetFieldOfView(72.0f);
 		SetViewTargetWithBlend(ArenaCamera.Get(), FMath::Max(0.1f, BlendSeconds), VTBlend_Cubic, 2.0f, false);
 		CreateArenaDebugWidget();
+		OnArenaPresentationStarted(AssignedBoardTeam);
 		UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_CAMERA_READY team=%s location=%s focus=%s"),
 			*UEnum::GetValueAsString(AssignedBoardTeam), *CameraLocation.ToCompactString(), *ArenaFocusLocation.ToCompactString());
 	}
@@ -171,6 +247,7 @@ void ABoardPlayerController::ClientEndArenaTransition_Implementation(float Blend
 		ArenaCamera->SetLifeSpan(FMath::Max(0.1f, BlendSeconds) + 0.1f);
 		ArenaCamera.Reset();
 	}
+	OnArenaPresentationEnded(AssignedBoardTeam);
 	UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_CAMERA_RETURN team=%s target=%s"),
 		*UEnum::GetValueAsString(AssignedBoardTeam), IsValid(ReturnTarget) ? *ReturnTarget->GetName() : TEXT("None"));
 	PreviousViewTarget.Reset();
@@ -191,31 +268,11 @@ void ABoardPlayerController::ClientShowLegalMoves_Implementation(const TArray<in
 {
 	HideLegalMoveMarkers();
 	AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard();
-	if (!IsLocalController() || !Board)
+	if (!IsLocalController() || !Board || !EnsureLegalMoveMarkerPool(Board, BoardIndices.Num()))
 	{
 		return;
 	}
-
-	UStaticMesh* MarkerMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-	UMaterialInterface* MarkerMaterialBase = LoadObject<UMaterialInterface>(
-		nullptr, TEXT("/Engine/EngineDebugMaterials/DebugMeshMaterial.DebugMeshMaterial"));
-	UMaterialInstanceDynamic* MarkerMaterial = MarkerMaterialBase
-		? UMaterialInstanceDynamic::Create(MarkerMaterialBase, this) : nullptr;
-	if (MarkerMaterial)
-	{
-		MarkerMaterial->SetVectorParameterValue(
-			TEXT("Color"), FLinearColor(0.01f, 1.0f, 0.04f, 1.0f));
-	}
-	if (!MarkerMesh || !MarkerMaterial || !Board->GetRootComponent())
-	{
-		UE_LOG(LogTemp, Error, TEXT("BOARD_LEGAL_MOVE_WORLD_MARKER_FAILED mesh=%s material=%s root=%s"),
-			MarkerMesh ? TEXT("true") : TEXT("false"),
-			MarkerMaterial ? TEXT("true") : TEXT("false"),
-			Board->GetRootComponent() ? TEXT("true") : TEXT("false"));
-		return;
-	}
-
-	LegalMoveWorldMarkers.Reserve(BoardIndices.Num());
+	int32 CreatedDestinations = 0;
 	for (const int32 BoardIndex : BoardIndices)
 	{
 		if (BoardIndex < 0 || BoardIndex >= 90)
@@ -223,37 +280,28 @@ void ABoardPlayerController::ClientShowLegalMoves_Implementation(const TArray<in
 			continue;
 		}
 		const FVector CellWorldPosition = Board->GetCellWorldPosition(BoardIndex);
-		FVector CellLocalPosition = Board->GetActorTransform().InverseTransformPosition(CellWorldPosition);
-		// The engine sphere is 100 units in diameter. At 0.045 relative scale its
-		// local radius is 2.25, so 2.5 places it clearly above the board surface.
-		CellLocalPosition.Z += 2.5f;
-
-		UStaticMeshComponent* Marker = NewObject<UStaticMeshComponent>(Board, NAME_None, RF_Transient);
-		if (!Marker) continue;
-		Board->AddInstanceComponent(Marker);
-		Marker->SetStaticMesh(MarkerMesh);
-		Marker->SetMaterial(0, MarkerMaterial);
-		Marker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Marker->SetGenerateOverlapEvents(false);
-		Marker->SetCanEverAffectNavigation(false);
-		Marker->SetCastShadow(false);
-		Marker->SetRenderInMainPass(true);
-		Marker->SetHiddenInGame(false, true);
-		Marker->SetVisibility(true, true);
-		Marker->SetTranslucentSortPriority(100);
-		Marker->SetupAttachment(Board->GetRootComponent());
-		Marker->SetRelativeLocation(CellLocalPosition);
-		Marker->SetRelativeRotation(FRotator::ZeroRotator);
-		Marker->SetRelativeScale3D(FVector(0.045f));
-		Marker->RegisterComponent();
-		LegalMoveWorldMarkers.Add(Marker);
+		const FVector CellLocalPosition = Board->GetActorTransform().InverseTransformPosition(CellWorldPosition);
+		UStaticMeshComponent* OuterMarker = LegalMoveOuterMarkerPool[CreatedDestinations];
+		UStaticMeshComponent* InnerMarker = LegalMoveInnerMarkerPool[CreatedDestinations];
+		OuterMarker->SetRelativeLocation(CellLocalPosition + FVector(0.0f, 0.0f, 1.20f));
+		OuterMarker->SetRelativeRotation(FRotator::ZeroRotator);
+		OuterMarker->SetRelativeScale3D(FVector(0.048f, 0.048f, 0.006f));
+		OuterMarker->SetHiddenInGame(false, true);
+		OuterMarker->SetVisibility(true, true);
+		InnerMarker->SetRelativeLocation(CellLocalPosition + FVector(0.0f, 0.0f, 1.58f));
+		InnerMarker->SetRelativeRotation(FRotator::ZeroRotator);
+		InnerMarker->SetRelativeScale3D(FVector(0.032f, 0.032f, 0.008f));
+		InnerMarker->SetHiddenInGame(false, true);
+		InnerMarker->SetVisibility(true, true);
+		++CreatedDestinations;
 
 		UE_LOG(LogTemp, VeryVerbose, TEXT("BOARD_LEGAL_MOVE_WORLD_MARKER index=%d local=%s world=%s"),
 			BoardIndex, *CellLocalPosition.ToCompactString(), *CellWorldPosition.ToCompactString());
 	}
 
-	UE_LOG(LogTemp, Display, TEXT("BOARD_LEGAL_MOVES_SHOWN team=%s count=%d mode=board_world_sphere material=debug_green"),
-		*UEnum::GetValueAsString(AssignedBoardTeam), LegalMoveWorldMarkers.Num());
+	UE_LOG(LogTemp, Display, TEXT("BOARD_LEGAL_MOVES_SHOWN team=%s count=%d pooled_components=%d mode=jade_disc_pool"),
+		*UEnum::GetValueAsString(AssignedBoardTeam), CreatedDestinations,
+		LegalMoveOuterMarkerPool.Num() + LegalMoveInnerMarkerPool.Num());
 }
 
 void ABoardPlayerController::ClientClearLegalMoves_Implementation()
@@ -276,6 +324,26 @@ void ABoardPlayerController::ClientShowBoardNotice_Implementation(const FString&
 		Widget->ShowNotice(FText::FromString(Message), bError);
 		BoardNoticeExpiresAtSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() + 1.5 : -1.0;
 	}
+}
+
+void ABoardPlayerController::ClientReturnToLobby_Implementation()
+{
+	if (!IsLocalController()) return;
+	HideLegalMoveMarkers();
+	RemoveArenaDebugWidget();
+	if (UFormationSelectionWidget* Widget = FormationSelectionWidget.Get()) Widget->RemoveFromParent();
+	FormationSelectionWidget.Reset();
+	if (UBoardStatusWidget* Widget = BoardStatusWidget.Get()) Widget->RemoveFromParent();
+	BoardStatusWidget.Reset();
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USessionSubsystem* Sessions = GameInstance->GetSubsystem<USessionSubsystem>())
+		{
+			Sessions->ReturnToLobby();
+			return;
+		}
+	}
+	UGameplayStatics::OpenLevel(this, FName(TEXT("/Game/User/Map/MainMap")), true);
 }
 
 void ABoardPlayerController::TestBoardClick(int32 BoardX, int32 BoardY)
@@ -410,6 +478,51 @@ void ABoardPlayerController::ServerResolveDebugArenaWinner_Implementation(EJangg
 #endif
 }
 
+void ABoardPlayerController::ServerRequestReturnToLobby_Implementation()
+{
+	AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard();
+	if (!Board || Board->GetMatchPhase() != EBoardMatchPhase::MatchFinished)
+	{
+		ClientShowBoardNotice(TEXT("대국이 끝난 뒤 로비로 돌아갈 수 있습니다"), true);
+		return;
+	}
+	UE_LOG(LogTemp, Display, TEXT("BOARD_RETURN_TO_LOBBY_REQUEST requester=%s"), *UEnum::GetValueAsString(AssignedBoardTeam));
+	TArray<ABoardPlayerController*> RemoteControllers;
+	ABoardPlayerController* LocalHostController = nullptr;
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (ABoardPlayerController* Controller = Cast<ABoardPlayerController>(It->Get()))
+		{
+			if (Controller->IsLocalController())
+			{
+				LocalHostController = Controller;
+			}
+			else
+			{
+				RemoteControllers.Add(Controller);
+			}
+		}
+	}
+	// Send remote clients first. Opening the listen host's lobby map can tear down the
+	// net driver immediately, so the host must be the final controller to travel.
+	for (ABoardPlayerController* Controller : RemoteControllers)
+	{
+		Controller->ClientReturnToLobby();
+	}
+	if (LocalHostController)
+	{
+		TWeakObjectPtr<ABoardPlayerController> WeakHostController = LocalHostController;
+		FTimerHandle HostReturnTimer;
+		GetWorldTimerManager().SetTimer(HostReturnTimer, FTimerDelegate::CreateWeakLambda(this, [WeakHostController]()
+		{
+			if (ABoardPlayerController* HostController = WeakHostController.Get())
+			{
+				HostController->ClientReturnToLobby();
+			}
+		}), 0.5f, false);
+	}
+}
+
 AAuthoritativeJanggiBoard* ABoardPlayerController::FindAuthoritativeBoard() const
 {
 	if (CachedBoard.IsValid())
@@ -443,6 +556,10 @@ void ABoardPlayerController::ReplaceLegacyFormationWidget()
 			if (Widget) Widget->RemoveFromParent();
 		}
 	}
+
+	// Lobby owns the entire front-end viewport. Only remove legacy widgets here;
+	// the canonical formation UI is created after a room has been entered.
+	if (bFrontEndLobby || ShouldShowFrontEndLobby()) return;
 
 	if ((AssignedBoardTeam == EJanggiTeam::Blue || AssignedBoardTeam == EJanggiTeam::Red) &&
 		!FormationSelectionWidget.IsValid())
@@ -480,7 +597,7 @@ void ABoardPlayerController::RemoveArenaDebugWidget()
 
 void ABoardPlayerController::CreateBoardStatusWidget()
 {
-	if (!IsLocalController() || BoardStatusWidget.IsValid())
+	if (!IsLocalController() || bFrontEndLobby || BoardStatusWidget.IsValid())
 	{
 		return;
 	}
@@ -496,7 +613,7 @@ void ABoardPlayerController::CreateBoardStatusWidget()
 
 void ABoardPlayerController::RefreshBoardStatus()
 {
-	if (!IsLocalController())
+	if (!IsLocalController() || bFrontEndLobby)
 	{
 		return;
 	}
@@ -545,18 +662,190 @@ void ABoardPlayerController::RefreshBoardStatus()
 	}
 }
 
+bool ABoardPlayerController::ShouldShowFrontEndLobby() const
+{
+	if (!GetWorld() || GetNetMode() != NM_Standalone) return false;
+	if (FParse::Param(FCommandLine::Get(), TEXT("SkipLobby")) ||
+		FParse::Param(FCommandLine::Get(), TEXT("BoardSmokeTest")) ||
+		FParse::Param(FCommandLine::Get(), TEXT("ArenaSmokeTest")) ||
+		FParse::Param(FCommandLine::Get(), TEXT("GeneralSmokeTest")))
+	{
+		return false;
+	}
+	return true;
+}
+
+void ABoardPlayerController::CreateLobbyWidget()
+{
+	if (!IsLocalController() || LobbyWidget.IsValid()) return;
+	if (ULobbyWidget* Widget = CreateWidget<ULobbyWidget>(this, ULobbyWidget::StaticClass()))
+	{
+		LobbyWidget = Widget;
+		Widget->AddToViewport(200);
+		FInputModeUIOnly InputMode;
+		SetInputMode(InputMode);
+		bShowMouseCursor = true;
+		UE_LOG(LogTemp, Display, TEXT("LOBBY_UI_READY mode=standalone"));
+	}
+}
+
+void ABoardPlayerController::RemoveLobbyWidget()
+{
+	if (ULobbyWidget* Widget = LobbyWidget.Get()) Widget->RemoveFromParent();
+	LobbyWidget.Reset();
+}
+
+void ABoardPlayerController::SetupLobbyCamera()
+{
+	if (!IsLocalController() || !GetWorld() || !bFrontEndLobby) return;
+	AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard();
+	if (!Board)
+	{
+		FTimerHandle RetryHandle;
+		GetWorldTimerManager().SetTimer(RetryHandle, this, &ABoardPlayerController::SetupLobbyCamera, 0.2f, false);
+		return;
+	}
+	if (LobbyCamera.IsValid() && bOwnsRuntimeLobbyCamera) LobbyCamera->Destroy();
+	LobbyCamera.Reset();
+	bOwnsRuntimeLobbyCamera = false;
+	if (ACameraActor* PlacedLobbyCamera = Board->GetLobbyCameraActor())
+	{
+		LobbyCamera = PlacedLobbyCamera;
+		SetViewTarget(PlacedLobbyCamera);
+		UE_LOG(LogTemp, Display, TEXT("LOBBY_CAMERA_READY source=placed actor=%s location=%s rotation=%s fov=%.1f"),
+			*PlacedLobbyCamera->GetName(),
+			*PlacedLobbyCamera->GetActorLocation().ToCompactString(),
+			*PlacedLobbyCamera->GetActorRotation().ToCompactString(),
+			PlacedLobbyCamera->GetCameraComponent()->FieldOfView);
+		return;
+	}
+	// The editor conversion button also tags the saved actor. This secondary
+	// lookup keeps the lobby deterministic if a Blueprint instance temporarily
+	// loses the direct actor reference after recompilation.
+	TArray<AActor*> CameraActors;
+	UGameplayStatics::GetAllActorsOfClass(this, ACameraActor::StaticClass(), CameraActors);
+	for (AActor* Actor : CameraActors)
+	{
+		ACameraActor* TaggedLobbyCamera = Cast<ACameraActor>(Actor);
+		if (!TaggedLobbyCamera || !TaggedLobbyCamera->ActorHasTag(TEXT("Lobby"))) continue;
+		LobbyCamera = TaggedLobbyCamera;
+		SetViewTarget(TaggedLobbyCamera);
+		UE_LOG(LogTemp, Display, TEXT("LOBBY_CAMERA_READY source=tagged actor=%s location=%s rotation=%s fov=%.1f"),
+			*TaggedLobbyCamera->GetName(),
+			*TaggedLobbyCamera->GetActorLocation().ToCompactString(),
+			*TaggedLobbyCamera->GetActorRotation().ToCompactString(),
+			TaggedLobbyCamera->GetCameraComponent()->FieldOfView);
+		return;
+	}
+	const FVector CameraLocation = Board->GetLobbyCameraWorldLocation();
+	const FVector FocusLocation = Board->GetLobbyCameraFocusWorldLocation();
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParameters.ObjectFlags |= RF_Transient;
+	LobbyCamera = GetWorld()->SpawnActor<ACameraActor>(
+		CameraLocation,
+		(FocusLocation - CameraLocation).Rotation(),
+		SpawnParameters);
+	if (LobbyCamera.IsValid())
+	{
+		bOwnsRuntimeLobbyCamera = true;
+		LobbyCamera->GetCameraComponent()->SetFieldOfView(Board->GetLobbyCameraFieldOfView());
+		SetViewTarget(LobbyCamera.Get());
+		UE_LOG(LogTemp, Display, TEXT("LOBBY_CAMERA_READY source=fallback location=%s focus=%s fov=%.1f"),
+			*CameraLocation.ToCompactString(), *FocusLocation.ToCompactString(), Board->GetLobbyCameraFieldOfView());
+	}
+}
+
+bool ABoardPlayerController::EnsureLegalMoveMarkerPool(
+	AAuthoritativeJanggiBoard* Board,
+	int32 RequiredDestinations)
+{
+	if (!Board || !Board->GetRootComponent()) return false;
+
+	UStaticMesh* MarkerMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
+	UMaterialInterface* MarkerMaterialBase = LoadObject<UMaterialInterface>(
+		nullptr, TEXT("/Engine/EngineDebugMaterials/DebugMeshMaterial.DebugMeshMaterial"));
+	if (!LegalMoveOuterMaterial && MarkerMaterialBase)
+	{
+		LegalMoveOuterMaterial = UMaterialInstanceDynamic::Create(MarkerMaterialBase, this);
+		if (LegalMoveOuterMaterial)
+		{
+			LegalMoveOuterMaterial->SetVectorParameterValue(
+				TEXT("Color"), FLinearColor(0.015f, 0.22f, 0.11f, 1.0f));
+		}
+	}
+	if (!LegalMoveInnerMaterial && MarkerMaterialBase)
+	{
+		LegalMoveInnerMaterial = UMaterialInstanceDynamic::Create(MarkerMaterialBase, this);
+		if (LegalMoveInnerMaterial)
+		{
+			LegalMoveInnerMaterial->SetVectorParameterValue(
+				TEXT("Color"), FLinearColor(0.18f, 0.82f, 0.48f, 1.0f));
+		}
+	}
+	if (!MarkerMesh || !LegalMoveOuterMaterial || !LegalMoveInnerMaterial)
+	{
+		UE_LOG(LogTemp, Error, TEXT("BOARD_LEGAL_MOVE_MARKER_POOL_FAILED mesh=%s material=%s"),
+			MarkerMesh ? TEXT("true") : TEXT("false"),
+			LegalMoveOuterMaterial && LegalMoveInnerMaterial ? TEXT("true") : TEXT("false"));
+		return false;
+	}
+
+	auto CreateMarker = [Board, MarkerMesh](UMaterialInterface* Material, int32 SortPriority)
+		-> UStaticMeshComponent*
+	{
+		UStaticMeshComponent* Marker = NewObject<UStaticMeshComponent>(Board, NAME_None, RF_Transient);
+		if (!Marker) return nullptr;
+		Board->AddInstanceComponent(Marker);
+		Marker->SetStaticMesh(MarkerMesh);
+		Marker->SetMaterial(0, Material);
+		Marker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Marker->SetGenerateOverlapEvents(false);
+		Marker->SetCanEverAffectNavigation(false);
+		Marker->SetCastShadow(false);
+		Marker->SetTranslucentSortPriority(SortPriority);
+		Marker->SetHiddenInGame(true, true);
+		Marker->SetVisibility(false, true);
+		Marker->SetupAttachment(Board->GetRootComponent());
+		Marker->RegisterComponent();
+		return Marker;
+	};
+
+	while (LegalMoveOuterMarkerPool.Num() < RequiredDestinations)
+	{
+		UStaticMeshComponent* OuterMarker = CreateMarker(LegalMoveOuterMaterial, 100);
+		UStaticMeshComponent* InnerMarker = CreateMarker(LegalMoveInnerMaterial, 101);
+		if (!OuterMarker || !InnerMarker)
+		{
+			if (IsValid(OuterMarker)) OuterMarker->DestroyComponent();
+			if (IsValid(InnerMarker)) InnerMarker->DestroyComponent();
+			return false;
+		}
+		LegalMoveOuterMarkerPool.Add(OuterMarker);
+		LegalMoveInnerMarkerPool.Add(InnerMarker);
+	}
+	return true;
+}
+
 void ABoardPlayerController::HideLegalMoveMarkers()
 {
-	for (UStaticMeshComponent* Marker : LegalMoveWorldMarkers)
+	for (UStaticMeshComponent* Marker : LegalMoveOuterMarkerPool)
 	{
-		if (IsValid(Marker)) Marker->DestroyComponent();
+		if (!IsValid(Marker)) continue;
+		Marker->SetHiddenInGame(true, true);
+		Marker->SetVisibility(false, true);
 	}
-	LegalMoveWorldMarkers.Reset();
+	for (UStaticMeshComponent* Marker : LegalMoveInnerMarkerPool)
+	{
+		if (!IsValid(Marker)) continue;
+		Marker->SetHiddenInGame(true, true);
+		Marker->SetVisibility(false, true);
+	}
 }
 
 void ABoardPlayerController::ScheduleBoardCameraSetup()
 {
-	if (!IsLocalController() || !GetWorld()) return;
+	if (!IsLocalController() || !GetWorld() || bFrontEndLobby) return;
 	BoardCameraSetupAttempts = 0;
 	GetWorldTimerManager().ClearTimer(BoardCameraSetupTimerHandle);
 	GetWorldTimerManager().SetTimer(

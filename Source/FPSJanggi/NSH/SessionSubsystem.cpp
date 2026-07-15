@@ -6,6 +6,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 #include "Online/OnlineSessionNames.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
@@ -187,6 +188,34 @@ void USessionSubsystem::LeaveRoom()
 	}
 }
 
+void USessionSubsystem::ReturnToLobby()
+{
+	if (nsh_b_operation_in_progress)
+	{
+		BroadcastFailure(TEXT("ReturnToLobby"), TEXT("Another session operation is already in progress."));
+		return;
+	}
+
+	nsh_b_return_to_lobby_after_destroy = true;
+	if (!nsh_session_interface.IsValid())
+	{
+		CompleteReturnToLobby();
+		return;
+	}
+	if (nsh_session_interface->GetNamedSession(nsh_session_name) == nullptr)
+	{
+		CompleteReturnToLobby();
+		return;
+	}
+
+	nsh_b_operation_in_progress = true;
+	if (!nsh_session_interface->DestroySession(nsh_session_name))
+	{
+		nsh_b_operation_in_progress = false;
+		CompleteReturnToLobby();
+	}
+}
+
 bool USessionSubsystem::EnsureSessionInterface(FName nsh_operation)
 {
 	if (!nsh_session_interface.IsValid())
@@ -278,6 +307,17 @@ void USessionSubsystem::ResetOperationState()
 	nsh_b_create_after_destroy = false;
 	nsh_b_join_after_destroy = false;
 	nsh_pending_join_index = INDEX_NONE;
+}
+
+void USessionSubsystem::CompleteReturnToLobby()
+{
+	nsh_b_operation_in_progress = false;
+	nsh_b_return_to_lobby_after_destroy = false;
+	if (UWorld* World = GetWorld())
+	{
+		UE_LOG(LogTemp, Display, TEXT("SESSION_RETURN_TO_LOBBY map=/Game/User/Map/MainMap"));
+		UGameplayStatics::OpenLevel(World, FName(TEXT("/Game/User/Map/MainMap")), true);
+	}
 }
 
 void USessionSubsystem::HandleCreateSessionComplete(FName nsh_completed_session_name, bool nsh_b_was_successful)
@@ -390,6 +430,16 @@ void USessionSubsystem::HandleDestroySessionComplete(FName nsh_completed_session
 {
 	if (nsh_completed_session_name != nsh_session_name)
 	{
+		return;
+	}
+
+	if (nsh_b_return_to_lobby_after_destroy)
+	{
+		nsh_on_session_operation_complete.Broadcast(
+			TEXT("ReturnToLobby"),
+			nsh_b_was_successful,
+			nsh_b_was_successful ? TEXT("Returning to lobby.") : TEXT("Session cleanup failed; returning locally."));
+		CompleteReturnToLobby();
 		return;
 	}
 

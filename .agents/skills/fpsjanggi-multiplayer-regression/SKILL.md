@@ -16,7 +16,7 @@ description: Build and triage the FPSJanggi Unreal Engine 5.8 multiplayer flow. 
    & 'C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat' FPSJanggi Win64 Development 'C:\gege\FPSJanggi.uproject' -WaitMutex -NoHotReload -NoUBA
    ```
 
-4. Run `scripts/run_two_player_smoke.ps1`. Use `-Arena` when testing collision and return-camera behavior.
+4. Run `scripts/run_standalone_lobby_smoke.ps1` for the front-end, then `scripts/run_two_player_smoke.ps1` for network play. Use `-Arena` when testing collision and return-camera behavior.
 5. Require the following evidence before calling the multiplayer path healthy:
    - Blue uses the placed camera tagged `Blue`; Red uses the placed camera tagged `Red`.
    - Both sides report 32 synchronized pieces.
