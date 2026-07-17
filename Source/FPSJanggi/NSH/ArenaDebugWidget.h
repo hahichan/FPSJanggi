@@ -21,5 +21,8 @@ private:
 	UFUNCTION()
 	void ResolveRedWinner();
 
+	UFUNCTION()
+	void RequestYJHArenaStart();
+
 	void ResolveWinner(uint8 TeamValue);
 };

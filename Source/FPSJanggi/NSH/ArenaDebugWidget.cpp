@@ -98,6 +98,8 @@ TSharedRef<SWidget> UArenaDebugWidget::RebuildWidget()
 		RowSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		RowSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
+	AddWinnerButton(WidgetTree, Row, TEXT("YJH Arena Start"), FLinearColor(0.08f, 0.38f, 0.18f, 1.0f))->OnClicked.AddDynamic(
+		this, &UArenaDebugWidget::RequestYJHArenaStart);
 	AddWinnerButton(WidgetTree, Row, TEXT("청 승리 · 전투 종료"), FLinearColor(0.035f, 0.16f, 0.52f, 1.0f))->OnClicked.AddDynamic(
 		this, &UArenaDebugWidget::ResolveBlueWinner);
 	AddWinnerButton(WidgetTree, Row, TEXT("한 승리 · 전투 종료"), FLinearColor(0.50f, 0.055f, 0.035f, 1.0f))->OnClicked.AddDynamic(
@@ -107,6 +109,14 @@ TSharedRef<SWidget> UArenaDebugWidget::RebuildWidget()
 
 void UArenaDebugWidget::ResolveBlueWinner() { ResolveWinner(static_cast<uint8>(EJanggiTeam::Blue)); }
 void UArenaDebugWidget::ResolveRedWinner() { ResolveWinner(static_cast<uint8>(EJanggiTeam::Red)); }
+
+void UArenaDebugWidget::RequestYJHArenaStart()
+{
+	if (ABoardPlayerController* Controller = GetOwningPlayer<ABoardPlayerController>())
+	{
+		Controller->RequestYJHArenaStart();
+	}
+}
 
 void UArenaDebugWidget::ResolveWinner(uint8 TeamValue)
 {

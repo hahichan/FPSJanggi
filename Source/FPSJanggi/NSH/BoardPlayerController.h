@@ -5,6 +5,7 @@
 #include "AuthoritativeJanggiBoard.h"
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "yjh_base/yjh_ArenaSubStateMachine.h"
 #include "BoardPlayerController.generated.h"
 
 class ACameraActor;
@@ -37,6 +38,7 @@ public:
 	void SetAssignedBoardTeam(EJanggiTeam Team);
 	void RequestFormation(EJanggiFormation Formation);
 	void RequestDebugArenaWinner(EJanggiTeam WinnerTeam);
+	void RequestYJHArenaStart();
 	void RequestReturnToLobby();
 	void ExitLobbyForLocalPreview();
 
@@ -94,6 +96,9 @@ public:
 	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
 	void RunGeneralDefeatSmokeTest();
 
+	UFUNCTION(Exec, Category = "FPS Janggi|Diagnostics")
+	void YJHStartArenaReal();
+
 protected:
 	UPROPERTY(ReplicatedUsing = OnRep_AssignedBoardTeam, BlueprintReadOnly, Category = "FPS Janggi|Board")
 	EJanggiTeam AssignedBoardTeam = EJanggiTeam::Unassigned;
@@ -111,7 +116,13 @@ protected:
 	void ServerResolveDebugArenaWinner(EJanggiTeam WinnerTeam);
 
 	UFUNCTION(Server, Reliable)
+	void ServerRequestYJHArenaStart();
+
+	UFUNCTION(Server, Reliable)
 	void ServerRequestReturnToLobby();
+
+	UFUNCTION(Client, Reliable)
+	void ClientRunYJHArenaStartStub(float ReturnDelaySeconds);
 
 private:
 	double LastServerBoardClickTimeSeconds = -1.0;
@@ -139,8 +150,11 @@ private:
 	double BoardNoticeExpiresAtSeconds = -1.0;
 	bool bFrontEndLobby = false;
 	bool bOwnsRuntimeLobbyCamera = false;
+	FYJHArenaSubStateMachine YJHArenaSubStateMachine;
+	FTimerHandle YJHArenaAutoReturnTimerHandle;
 
 	AAuthoritativeJanggiBoard* FindAuthoritativeBoard() const;
+	void HandleYJHArenaAutoReturn();
 	void HandleBoardPointerClick(AAuthoritativeJanggiBoard* Board);
 	void ReplaceLegacyFormationWidget();
 	void CreateArenaDebugWidget();

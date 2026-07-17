@@ -19,9 +19,37 @@
 #include "TimerManager.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "SessionSubsystem.h"
+
+namespace
+{
+#if !UE_BUILD_SHIPPING
+FAutoConsoleCommandWithWorld GYJHStartArenaRealCommand(
+	TEXT("yjh.startarenareal"),
+	TEXT("Request YJH ArenaBattleReal test transition while ArenaBattle is active."),
+	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World)
+	{
+		if (!World)
+		{
+			return;
+		}
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ABoardPlayerController* Controller = Cast<ABoardPlayerController>(It->Get()))
+			{
+				if (Controller->IsLocalController())
+				{
+					Controller->RequestYJHArenaStart();
+					break;
+				}
+			}
+		}
+	}));
+#endif
+}
 
 ABoardPlayerController::ABoardPlayerController()
 {
@@ -73,6 +101,8 @@ void ABoardPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(BoardCameraSetupTimerHandle);
 	GetWorldTimerManager().ClearTimer(BoardStatusRefreshTimerHandle);
+	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+	YJHArenaSubStateMachine.Reset();
 	HideLegalMoveMarkers();
 	for (UStaticMeshComponent* Marker : LegalMoveOuterMarkerPool)
 	{
@@ -110,6 +140,13 @@ void ABoardPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 
 bool ABoardPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
+#if !UE_BUILD_SHIPPING
+	if (Params.Key == EKeys::F8 && Params.Event == IE_Pressed && IsLocalController())
+	{
+		RequestYJHArenaStart();
+		return true;
+	}
+#endif
 	if (Params.Key == EKeys::LeftMouseButton && Params.Event == IE_Pressed && IsLocalController())
 	{
 		if (bFrontEndLobby) return Super::InputKey(Params);
@@ -170,6 +207,17 @@ void ABoardPlayerController::RequestReturnToLobby()
 	}
 }
 
+void ABoardPlayerController::RequestYJHArenaStart()
+{
+#if !UE_BUILD_SHIPPING
+	if (!IsLocalController())
+	{
+		return;
+	}
+	ServerRequestYJHArenaStart();
+#endif
+}
+
 void ABoardPlayerController::ExitLobbyForLocalPreview()
 {
 #if !UE_BUILD_SHIPPING
@@ -213,6 +261,8 @@ void ABoardPlayerController::ClientBeginArenaTransition_Implementation(
 	float BlendSeconds)
 {
 	if (!IsLocalController() || !GetWorld()) return;
+	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+	YJHArenaSubStateMachine.EnterArenaBattle();
 	// The canonical board view is the team-oriented runtime camera. Legacy
 	// Blueprint formation logic may have replaced GetViewTarget(), so do not
 	// capture that stale camera for the return path.
@@ -236,6 +286,8 @@ void ABoardPlayerController::ClientBeginArenaTransition_Implementation(
 void ABoardPlayerController::ClientEndArenaTransition_Implementation(float BlendSeconds)
 {
 	if (!IsLocalController()) return;
+	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+	YJHArenaSubStateMachine.Reset();
 	RemoveArenaDebugWidget();
 	AActor* ReturnTarget = BoardCamera.IsValid() ? BoardCamera.Get() : PreviousViewTarget.Get();
 	if (IsValid(ReturnTarget))
@@ -444,6 +496,13 @@ void ABoardPlayerController::RunGeneralDefeatSmokeTest()
 #endif
 }
 
+void ABoardPlayerController::YJHStartArenaReal()
+{
+#if !UE_BUILD_SHIPPING
+	RequestYJHArenaStart();
+#endif
+}
+
 void ABoardPlayerController::ServerRequestBoardClick_Implementation(FVector_NetQuantize10 LocalPosition)
 {
 	const UWorld* World = GetWorld();
@@ -475,6 +534,61 @@ void ABoardPlayerController::ServerResolveDebugArenaWinner_Implementation(EJangg
 			Board->ResolveArenaBattle(WinnerTeam);
 		}
 	}
+#endif
+}
+
+void ABoardPlayerController::ServerRequestYJHArenaStart_Implementation()
+{
+#if !UE_BUILD_SHIPPING
+	AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard();
+	if (!Board || Board->GetMatchPhase() != EBoardMatchPhase::ArenaBattle)
+	{
+		ClientShowBoardNotice(TEXT("YJH Arena Start is available during ArenaBattle only"), true);
+		return;
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("YJH_ARENA_REAL_STARTED requester=%s"), *UEnum::GetValueAsString(AssignedBoardTeam));
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (ABoardPlayerController* Controller = Cast<ABoardPlayerController>(It->Get()))
+		{
+			Controller->ClientRunYJHArenaStartStub(1.0f);
+		}
+	}
+#endif
+}
+
+void ABoardPlayerController::ClientRunYJHArenaStartStub_Implementation(float ReturnDelaySeconds)
+{
+#if !UE_BUILD_SHIPPING
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	FString FailureReason;
+	if (!YJHArenaSubStateMachine.TryEnterArenaBattleReal(FailureReason))
+	{
+		ClientShowBoardNotice(FailureReason, true);
+		return;
+	}
+
+	ClientShowBoardNotice(TEXT("YJH Arena Mode Entered (Stub)"), false);
+	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+	GetWorldTimerManager().SetTimer(
+		YJHArenaAutoReturnTimerHandle,
+		this,
+		&ABoardPlayerController::HandleYJHArenaAutoReturn,
+		FMath::Max(0.1f, ReturnDelaySeconds),
+		false);
+#endif
+}
+
+void ABoardPlayerController::HandleYJHArenaAutoReturn()
+{
+#if !UE_BUILD_SHIPPING
+	YJHArenaSubStateMachine.ReturnToArenaBattle();
+	ClientShowBoardNotice(TEXT("Returned to ArenaBattle UI"), false);
 #endif
 }
 
@@ -583,7 +697,7 @@ void ABoardPlayerController::CreateArenaDebugWidget()
 	if (UArenaDebugWidget* Widget = CreateWidget<UArenaDebugWidget>(this, UArenaDebugWidget::StaticClass()))
 	{
 		ArenaDebugWidget = Widget;
-		Widget->AddToViewport(120);
+		Widget->AddToViewport(1000);
 		UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_DEBUG_UI_READY team=%s"), *UEnum::GetValueAsString(AssignedBoardTeam));
 	}
 #endif
@@ -620,6 +734,11 @@ void ABoardPlayerController::RefreshBoardStatus()
 	if (const AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard())
 	{
 		const EBoardMatchPhase Phase = Board->GetMatchPhase();
+		if ((Phase == EBoardMatchPhase::ArenaTransition || Phase == EBoardMatchPhase::ArenaBattle ||
+			Phase == EBoardMatchPhase::BattleResolution) && !ArenaDebugWidget.IsValid())
+		{
+			CreateArenaDebugWidget();
+		}
 		const bool bBoardViewPhase = Phase == EBoardMatchPhase::BoardTurn;
 		if (bBoardViewPhase && BoardCamera.IsValid() && !ArenaCamera.IsValid() &&
 			GetViewTarget() != BoardCamera.Get())
