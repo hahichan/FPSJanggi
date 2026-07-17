@@ -9,6 +9,7 @@
 #include "BoardPlayerController.generated.h"
 
 class ACameraActor;
+class UArenaCombatStatusWidget;
 class UArenaDebugWidget;
 class UBoardStatusWidget;
 class UFormationSelectionWidget;
@@ -39,6 +40,7 @@ public:
 	void RequestFormation(EJanggiFormation Formation);
 	void RequestDebugArenaWinner(EJanggiTeam WinnerTeam);
 	void RequestYJHArenaStart();
+	void RequestYJHArenaStartWithClassPaths(const FString& BlueClassPath, const FString& RedClassPath);
 	void RequestReturnToLobby();
 	void ExitLobbyForLocalPreview();
 
@@ -119,6 +121,9 @@ protected:
 	void ServerRequestYJHArenaStart();
 
 	UFUNCTION(Server, Reliable)
+	void ServerRequestYJHArenaStartWithClassPaths(const FString& BlueClassPath, const FString& RedClassPath);
+
+	UFUNCTION(Server, Reliable)
 	void ServerRequestReturnToLobby();
 
 	UFUNCTION(Client, Reliable)
@@ -133,6 +138,7 @@ private:
 	TWeakObjectPtr<ACameraActor> ArenaCamera;
 	TWeakObjectPtr<ACameraActor> LobbyCamera;
 	TWeakObjectPtr<UArenaDebugWidget> ArenaDebugWidget;
+	TWeakObjectPtr<UArenaCombatStatusWidget> ArenaCombatStatusWidget;
 	TWeakObjectPtr<UFormationSelectionWidget> FormationSelectionWidget;
 	TWeakObjectPtr<UBoardStatusWidget> BoardStatusWidget;
 	TWeakObjectPtr<ULobbyWidget> LobbyWidget;
@@ -155,10 +161,15 @@ private:
 
 	AAuthoritativeJanggiBoard* FindAuthoritativeBoard() const;
 	void HandleYJHArenaAutoReturn();
+	void HideBoardPhaseWidgetsForArenaReal();
+	void TryActivateArenaBattleRealControl();
 	void HandleBoardPointerClick(AAuthoritativeJanggiBoard* Board);
 	void ReplaceLegacyFormationWidget();
 	void CreateArenaDebugWidget();
 	void RemoveArenaDebugWidget();
+	void CreateArenaCombatStatusWidget();
+	void RemoveArenaCombatStatusWidget();
+	void RefreshArenaCombatStatusWidget();
 	void CreateBoardStatusWidget();
 	void RefreshBoardStatus();
 	bool ShouldShowFrontEndLobby() const;
@@ -169,4 +180,7 @@ private:
 	void HideLegalMoveMarkers();
 	void ScheduleBoardCameraSetup();
 	void TrySetupBoardCamera();
+
+	FTimerHandle YJHArenaControlActivateRetryTimerHandle;
+	int32 YJHArenaControlActivateRetryCount = 0;
 };

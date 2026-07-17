@@ -7,7 +7,9 @@
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/GameStateBase.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Net/UnrealNetwork.h"
 #include "yjh_base/yjh_ArenaCombatantBase.h"
 #include "yjh_base/yjh_ArenaHealthComponent.h"
 #include "yjh_base/yjh_ArenaSkillProjectile.h"
@@ -15,10 +17,28 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogYJHCombat, Log, All);
 
+namespace
+{
+	FName ResolveSkillSlotName(const FYJHSkillDefinition& Skill)
+	{
+		return Skill.InputSlotEnum != EYJHSkillSlot::None
+			? YJHSkillSlotToName(Skill.InputSlotEnum)
+			: Skill.InputSlot;
+	}
+}
+
 UYJHArenaCombatComponent::UYJHArenaCombatComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+	SetIsReplicatedByDefault(true);
+}
+
+void UYJHArenaCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UYJHArenaCombatComponent, CombatSessionId);
+	DOREPLIFETIME(UYJHArenaCombatComponent, CombatantId);
 }
 
 void UYJHArenaCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -38,6 +58,7 @@ bool UYJHArenaCombatComponent::InitializeSkillMap()
 	SkillById.Reset();
 	SlotToSkillId.Reset();
 	CooldownEndTimeBySkillId.Reset();
+	ClientCooldownEndTimeBySlot.Reset();
 	PassiveSkills.Reset();
 	RestoreMovementDefaults();
 
@@ -47,6 +68,9 @@ bool UYJHArenaCombatComponent::InitializeSkillMap()
 		SetComponentTickEnabled(false);
 		return false;
 	}
+
+	UE_LOG(LogYJHCombat, Display, TEXT("YJH_SKILL_INIT start owner=%s asset=%s max_slots=%d"),
+		*GetNameSafe(GetOwner()), *GetNameSafe(SkillDataAsset), MaxSkillSlots);
 
 	MaxSkillSlots = FMath::Max(1, SkillDataAsset->MaxSkillSlots);
 
@@ -100,6 +124,7 @@ FYJHSkillExecutionResult UYJHArenaCombatComponent::RequestSkillBySlot(FName Slot
 	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
 		const FYJHSkillExecutionResult Result = BuildFailure(SlotIndex, NAME_None, EYJHSkillFailCode::SKX_ExecutionBlocked);
+		UE_LOG(LogYJHCombat, Warning, TEXT("YJH_SKILL_REQUEST_BLOCKED owner=%s slot=%s reason=NoAuthority"), *GetNameSafe(GetOwner()), *SlotIndex.ToString());
 		OnSkillRequestFailed.Broadcast(Result.FailCode);
 		return Result;
 	}
@@ -108,6 +133,7 @@ FYJHSkillExecutionResult UYJHArenaCombatComponent::RequestSkillBySlot(FName Slot
 	if (!SkillIdPtr)
 	{
 		const FYJHSkillExecutionResult Result = BuildFailure(SlotIndex, NAME_None, EYJHSkillFailCode::SKX_NoSkillMapped);
+		UE_LOG(LogYJHCombat, Warning, TEXT("YJH_SKILL_REQUEST_BLOCKED owner=%s slot=%s reason=NoSkillMapped"), *GetNameSafe(GetOwner()), *SlotIndex.ToString());
 		OnSkillRequestFailed.Broadcast(Result.FailCode);
 		return Result;
 	}
@@ -116,6 +142,7 @@ FYJHSkillExecutionResult UYJHArenaCombatComponent::RequestSkillBySlot(FName Slot
 	if (!SkillPtr)
 	{
 		const FYJHSkillExecutionResult Result = BuildFailure(SlotIndex, *SkillIdPtr, EYJHSkillFailCode::SKX_NoSkillMapped);
+		UE_LOG(LogYJHCombat, Warning, TEXT("YJH_SKILL_REQUEST_BLOCKED owner=%s slot=%s skill=%s reason=MissingDefinition"), *GetNameSafe(GetOwner()), *SlotIndex.ToString(), *SkillIdPtr->ToString());
 		OnSkillRequestFailed.Broadcast(Result.FailCode);
 		return Result;
 	}
@@ -125,6 +152,8 @@ FYJHSkillExecutionResult UYJHArenaCombatComponent::RequestSkillBySlot(FName Slot
 	if (!ValidateRequest(SkillSnapshot, RuntimeContext, FailCode))
 	{
 		const FYJHSkillExecutionResult Result = BuildFailure(SlotIndex, SkillSnapshot.SkillId, FailCode);
+		UE_LOG(LogYJHCombat, Warning, TEXT("YJH_SKILL_REQUEST_BLOCKED owner=%s slot=%s skill=%s fail=%s session=%s"),
+			*GetNameSafe(GetOwner()), *SlotIndex.ToString(), *SkillSnapshot.SkillId.ToString(), *UEnum::GetValueAsString(FailCode), *RuntimeContext.CombatSessionId.ToString());
 		OnSkillRequestFailed.Broadcast(Result.FailCode);
 		return Result;
 	}
@@ -138,9 +167,14 @@ FYJHSkillExecutionResult UYJHArenaCombatComponent::RequestSkillBySlot(FName Slot
 	ExecuteSkill(SkillSnapshot, RuntimeContext, Result);
 	if (!Result.bSuccess)
 	{
+		UE_LOG(LogYJHCombat, Warning, TEXT("YJH_SKILL_EXECUTE_FAILED owner=%s slot=%s skill=%s fail=%s"),
+			*GetNameSafe(GetOwner()), *SlotIndex.ToString(), *SkillSnapshot.SkillId.ToString(), *UEnum::GetValueAsString(Result.FailCode));
 		OnSkillRequestFailed.Broadcast(Result.FailCode);
 		return Result;
 	}
+
+	UE_LOG(LogYJHCombat, Display, TEXT("YJH_SKILL_EXECUTE_OK owner=%s slot=%s skill=%s exec=%s"),
+		*GetNameSafe(GetOwner()), *SlotIndex.ToString(), *SkillSnapshot.SkillId.ToString(), *UEnum::GetValueAsString(SkillSnapshot.ExecType));
 
 	StartSkillCooldown(SkillSnapshot);
 	return Result;
@@ -148,8 +182,46 @@ FYJHSkillExecutionResult UYJHArenaCombatComponent::RequestSkillBySlot(FName Slot
 
 float UYJHArenaCombatComponent::GetRemainingCooldownBySlot(FName SlotIndex) const
 {
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		const double* ClientEndTimePtr = ClientCooldownEndTimeBySlot.Find(SlotIndex);
+		if (ClientEndTimePtr && GetWorld())
+		{
+			const AGameStateBase* GameState = GetWorld()->GetGameState();
+			const double SyncedTime = GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+			return static_cast<float>(FMath::Max(0.0, *ClientEndTimePtr - SyncedTime));
+		}
+	}
+
 	const FName* SkillId = SlotToSkillId.Find(SlotIndex);
 	return SkillId ? GetRemainingCooldownBySkillId(*SkillId) : 0.0f;
+}
+
+void UYJHArenaCombatComponent::ApplyClientCooldownSnapshot(const TArray<float>& SlotRemainingSeconds)
+{
+	if (!GetWorld())
+	{
+		return;
+	}
+
+	const AGameStateBase* GameState = GetWorld()->GetGameState();
+	const double SyncedTime = GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+
+	for (int32 Index = 0; Index < SlotRemainingSeconds.Num(); ++Index)
+	{
+		const int32 SlotNumber = Index + 1;
+		const FName SlotName(*FString::Printf(TEXT("Slot%d"), SlotNumber));
+		const float Remaining = FMath::Max(0.0f, SlotRemainingSeconds[Index]);
+		if (Remaining <= KINDA_SMALL_NUMBER)
+		{
+			ClientCooldownEndTimeBySlot.Remove(SlotName);
+		}
+		else
+		{
+			ClientCooldownEndTimeBySlot.Add(SlotName, SyncedTime + Remaining);
+		}
+		OnCooldownChanged.Broadcast(SlotName, Remaining);
+	}
 }
 
 float UYJHArenaCombatComponent::GetRemainingCooldownBySkillId(FName SkillId) const
@@ -158,12 +230,16 @@ float UYJHArenaCombatComponent::GetRemainingCooldownBySkillId(FName SkillId) con
 	{
 		return 0.0f;
 	}
+
+	const AGameStateBase* GameState = GetWorld()->GetGameState();
+	const double SyncedTime = GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+
 	const double* EndTimePtr = CooldownEndTimeBySkillId.Find(SkillId);
 	if (!EndTimePtr)
 	{
 		return 0.0f;
 	}
-	return static_cast<float>(FMath::Max(0.0, *EndTimePtr - GetWorld()->GetTimeSeconds()));
+	return static_cast<float>(FMath::Max(0.0, *EndTimePtr - SyncedTime));
 }
 
 FYJHSkillExecutionResult UYJHArenaCombatComponent::BuildFailure(FName SlotIndex, FName SkillId, EYJHSkillFailCode FailCode) const
@@ -356,9 +432,10 @@ void UYJHArenaCombatComponent::StartSkillCooldown(const FYJHSkillDefinition& Ski
 	}
 
 	CooldownEndTimeBySkillId.Add(SkillSnapshot.SkillId, GetWorld()->GetTimeSeconds() + Cooldown);
-	if (!SkillSnapshot.InputSlot.IsNone())
+	const FName SlotName = ResolveSkillSlotName(SkillSnapshot);
+	if (!SlotName.IsNone())
 	{
-		OnCooldownChanged.Broadcast(SkillSnapshot.InputSlot, Cooldown);
+		OnCooldownChanged.Broadcast(SlotName, Cooldown);
 	}
 }
 

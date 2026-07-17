@@ -5,16 +5,22 @@
 #include "AuthoritativeJanggiBoard.h"
 #include "BoardPlayerController.h"
 #include "JanggiUIStyle.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Blueprint/WidgetTree.h"
+#include "Engine/Blueprint.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/ComboBoxString.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "GameFramework/Pawn.h"
+#include "Misc/PackageName.h"
+#include "Modules/ModuleManager.h"
 
 namespace
 {
@@ -68,11 +74,12 @@ TSharedRef<SWidget> UArenaDebugWidget::RebuildWidget()
 	UCanvasPanelSlot* BackgroundSlot = Canvas->AddChildToCanvas(Background);
 	BackgroundSlot->SetAnchors(FAnchors(0.5f, 1.0f));
 	BackgroundSlot->SetAlignment(FVector2D(0.5f, 1.0f));
-	BackgroundSlot->SetPosition(FVector2D(0.0f, -24.0f));
-	BackgroundSlot->SetSize(FVector2D(670.0f, 144.0f));
+	BackgroundSlot->SetPosition(FVector2D(0.0f, -18.0f));
+	BackgroundSlot->SetSize(FVector2D(760.0f, 250.0f));
 
 	UVerticalBox* Panel = WidgetTree->ConstructWidget<UVerticalBox>();
 	Background->SetContent(Panel);
+	RebuildPieceClassCandidates();
 	UTextBlock* Title = WidgetTree->ConstructWidget<UTextBlock>();
 	Title->SetText(FText::FromString(TEXT("전투 결과 판정")));
 	Title->SetJustification(ETextJustify::Center);
@@ -92,10 +99,79 @@ TSharedRef<SWidget> UArenaDebugWidget::RebuildWidget()
 		SubtitleSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 
+	UHorizontalBox* SelectionRow = WidgetTree->ConstructWidget<UHorizontalBox>();
+	if (UVerticalBoxSlot* SelectionRowSlot = Panel->AddChildToVerticalBox(SelectionRow))
+	{
+		SelectionRowSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 6.0f));
+		SelectionRowSlot->SetHorizontalAlignment(HAlign_Fill);
+	}
+
+	UVerticalBox* BlueColumn = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UHorizontalBoxSlot* BlueColumnSlot = SelectionRow->AddChildToHorizontalBox(BlueColumn))
+	{
+		BlueColumnSlot->SetPadding(FMargin(6.0f));
+		BlueColumnSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	}
+
+	UTextBlock* BlueLabel = WidgetTree->ConstructWidget<UTextBlock>();
+	BlueLabel->SetText(FText::FromString(TEXT("Blue Piece (piece folder)")));
+	FPSJanggiUI::StyleText(BlueLabel, 12, FPSJanggiUI::MutedIvory(), true);
+	BlueColumn->AddChildToVerticalBox(BlueLabel);
+
+	BluePieceCombo = WidgetTree->ConstructWidget<UComboBoxString>();
+	if (BluePieceCombo)
+	{
+		for (const FString& Label : CandidateLabels)
+		{
+			BluePieceCombo->AddOption(Label);
+		}
+		if (CandidateLabels.Num() > 0)
+		{
+			BluePieceCombo->SetSelectedOption(CandidateLabels[0]);
+		}
+		BlueColumn->AddChildToVerticalBox(BluePieceCombo);
+	}
+
+	UVerticalBox* RedColumn = WidgetTree->ConstructWidget<UVerticalBox>();
+	if (UHorizontalBoxSlot* RedColumnSlot = SelectionRow->AddChildToHorizontalBox(RedColumn))
+	{
+		RedColumnSlot->SetPadding(FMargin(6.0f));
+		RedColumnSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	}
+
+	UTextBlock* RedLabel = WidgetTree->ConstructWidget<UTextBlock>();
+	RedLabel->SetText(FText::FromString(TEXT("Red Piece (piece folder)")));
+	FPSJanggiUI::StyleText(RedLabel, 12, FPSJanggiUI::MutedIvory(), true);
+	RedColumn->AddChildToVerticalBox(RedLabel);
+
+	RedPieceCombo = WidgetTree->ConstructWidget<UComboBoxString>();
+	if (RedPieceCombo)
+	{
+		for (const FString& Label : CandidateLabels)
+		{
+			RedPieceCombo->AddOption(Label);
+		}
+		if (CandidateLabels.Num() > 0)
+		{
+			RedPieceCombo->SetSelectedOption(CandidateLabels[0]);
+		}
+		RedColumn->AddChildToVerticalBox(RedPieceCombo);
+	}
+
+	SelectionSummaryText = WidgetTree->ConstructWidget<UTextBlock>();
+	FPSJanggiUI::StyleText(SelectionSummaryText.Get(), 11, FPSJanggiUI::MutedIvory());
+	if (UVerticalBoxSlot* SummarySlot = Panel->AddChildToVerticalBox(SelectionSummaryText))
+	{
+		SummarySlot->SetPadding(FMargin(0.0f, 2.0f, 0.0f, 4.0f));
+		SummarySlot->SetHorizontalAlignment(HAlign_Fill);
+	}
+	RefreshSelectionSummary();
+
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>();
 	if (UVerticalBoxSlot* RowSlot = Panel->AddChildToVerticalBox(Row))
 	{
-		RowSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		RowSlot->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+		RowSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
 		RowSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 	AddWinnerButton(WidgetTree, Row, TEXT("YJH Arena Start"), FLinearColor(0.08f, 0.38f, 0.18f, 1.0f))->OnClicked.AddDynamic(
@@ -107,6 +183,78 @@ TSharedRef<SWidget> UArenaDebugWidget::RebuildWidget()
 	return Super::RebuildWidget();
 }
 
+void UArenaDebugWidget::RebuildPieceClassCandidates()
+{
+	CandidateLabels.Reset();
+	LabelToClassPath.Reset();
+
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	FARFilter Filter;
+	Filter.PackagePaths.Add(FName(TEXT("/Game/User/piece")));
+	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+	Filter.bRecursivePaths = true;
+
+	TArray<FAssetData> BlueprintAssets;
+	AssetRegistry.GetAssets(Filter, BlueprintAssets);
+
+	TSet<FString> SeenPaths;
+	for (const FAssetData& Asset : BlueprintAssets)
+	{
+		FString GeneratedClassExportPath;
+		if (!Asset.GetTagValue(FName(TEXT("GeneratedClass")), GeneratedClassExportPath) || GeneratedClassExportPath.IsEmpty())
+		{
+			continue;
+		}
+
+		const FString ClassObjectPath = FPackageName::ExportTextPathToObjectPath(GeneratedClassExportPath);
+		if (SeenPaths.Contains(ClassObjectPath))
+		{
+			continue;
+		}
+
+		UClass* LoadedClass = StaticLoadClass(APawn::StaticClass(), nullptr, *ClassObjectPath);
+		if (!LoadedClass || !LoadedClass->IsChildOf(APawn::StaticClass()) || LoadedClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			continue;
+		}
+
+		SeenPaths.Add(ClassObjectPath);
+		FString Label = LoadedClass->GetName();
+		if (LabelToClassPath.Contains(Label))
+		{
+			Label = FString::Printf(TEXT("%s (%s)"), *LoadedClass->GetName(), *Asset.AssetName.ToString());
+		}
+
+		CandidateLabels.Add(Label);
+		LabelToClassPath.Add(Label, ClassObjectPath);
+	}
+
+	CandidateLabels.Sort();
+}
+
+void UArenaDebugWidget::RefreshSelectionSummary()
+{
+	if (!SelectionSummaryText.Get())
+	{
+		return;
+	}
+
+	if (CandidateLabels.Num() == 0)
+	{
+		SelectionSummaryText.Get()->SetText(FText::FromString(TEXT("piece 폴더에서 Pawn Blueprint를 찾지 못했습니다.")));
+		return;
+	}
+
+	const FString BlueSelected = BluePieceCombo ? BluePieceCombo->GetSelectedOption() : TEXT("None");
+	const FString RedSelected = RedPieceCombo ? RedPieceCombo->GetSelectedOption() : TEXT("None");
+	SelectionSummaryText.Get()->SetText(FText::FromString(FString::Printf(
+		TEXT("선택됨  Blue: %s  |  Red: %s"),
+		*BlueSelected,
+		*RedSelected)));
+}
+
 void UArenaDebugWidget::ResolveBlueWinner() { ResolveWinner(static_cast<uint8>(EJanggiTeam::Blue)); }
 void UArenaDebugWidget::ResolveRedWinner() { ResolveWinner(static_cast<uint8>(EJanggiTeam::Red)); }
 
@@ -114,7 +262,33 @@ void UArenaDebugWidget::RequestYJHArenaStart()
 {
 	if (ABoardPlayerController* Controller = GetOwningPlayer<ABoardPlayerController>())
 	{
-		Controller->RequestYJHArenaStart();
+		FString BlueClassPath;
+		FString RedClassPath;
+
+		if (BluePieceCombo)
+		{
+			if (const FString* Path = LabelToClassPath.Find(BluePieceCombo->GetSelectedOption()))
+			{
+				BlueClassPath = *Path;
+			}
+		}
+
+		if (RedPieceCombo)
+		{
+			if (const FString* Path = LabelToClassPath.Find(RedPieceCombo->GetSelectedOption()))
+			{
+				RedClassPath = *Path;
+			}
+		}
+
+		if (!BlueClassPath.IsEmpty() && !RedClassPath.IsEmpty())
+		{
+			Controller->RequestYJHArenaStartWithClassPaths(BlueClassPath, RedClassPath);
+		}
+		else
+		{
+			Controller->RequestYJHArenaStart();
+		}
 	}
 }
 

@@ -5,6 +5,30 @@
 namespace
 {
 	constexpr float MaxCooldownSeconds = 999.0f;
+
+	bool TryParseSlotNumber(const FName SlotName, int32& OutSlotNumber)
+	{
+		OutSlotNumber = INDEX_NONE;
+		if (SlotName.IsNone())
+		{
+			return false;
+		}
+
+		const FString SlotString = SlotName.ToString();
+		if (!SlotString.StartsWith(TEXT("Slot")))
+		{
+			return false;
+		}
+
+		const FString NumberText = SlotString.RightChop(4);
+		if (NumberText.IsEmpty())
+		{
+			return false;
+		}
+
+		OutSlotNumber = FCString::Atoi(*NumberText);
+		return OutSlotNumber >= 1 && OutSlotNumber <= 10;
+	}
 }
 
 bool UYJHSkillDataAsset::BuildSkillMaps(TMap<FName, FYJHSkillDefinition>& OutBySkillId, TMap<FName, FName>& OutSlotToSkillId, FString& OutError) const
@@ -41,17 +65,35 @@ bool UYJHSkillDataAsset::BuildSkillMaps(TMap<FName, FYJHSkillDefinition>& OutByS
 
 		if (!Skill.bIsPassive)
 		{
-			if (Skill.InputSlot.IsNone())
+			const FName ResolvedInputSlot = Skill.InputSlotEnum != EYJHSkillSlot::None
+				? YJHSkillSlotToName(Skill.InputSlotEnum)
+				: Skill.InputSlot;
+
+			if (ResolvedInputSlot.IsNone())
 			{
 				OutError = FString::Printf(TEXT("SKV_MissingRequiredField: InputSlot for %s"), *Skill.SkillId.ToString());
 				return false;
 			}
-			if (OutSlotToSkillId.Contains(Skill.InputSlot))
+
+			int32 ParsedSlotNumber = INDEX_NONE;
+			if (!TryParseSlotNumber(ResolvedInputSlot, ParsedSlotNumber))
 			{
-				OutError = FString::Printf(TEXT("SKV_DuplicateSlotMapping: %s"), *Skill.InputSlot.ToString());
+				OutError = FString::Printf(TEXT("SKV_InvalidSlotMapping: %s uses invalid slot %s"), *Skill.SkillId.ToString(), *ResolvedInputSlot.ToString());
 				return false;
 			}
-			OutSlotToSkillId.Add(Skill.InputSlot, Skill.SkillId);
+
+			if (ParsedSlotNumber > MaxSkillSlots)
+			{
+				OutError = FString::Printf(TEXT("SKV_SlotOutOfRange: %s mapped to %s but MaxSkillSlots=%d"), *Skill.SkillId.ToString(), *ResolvedInputSlot.ToString(), MaxSkillSlots);
+				return false;
+			}
+
+			if (OutSlotToSkillId.Contains(ResolvedInputSlot))
+			{
+				OutError = FString::Printf(TEXT("SKV_DuplicateSlotMapping: %s"), *ResolvedInputSlot.ToString());
+				return false;
+			}
+			OutSlotToSkillId.Add(ResolvedInputSlot, Skill.SkillId);
 		}
 
 		OutBySkillId.Add(Skill.SkillId, Skill);

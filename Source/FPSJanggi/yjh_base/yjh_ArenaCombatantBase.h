@@ -9,8 +9,11 @@
 
 class UYJHArenaCombatComponent;
 class UYJHArenaHealthComponent;
+class UYJHSkillDataAsset;
 class UInputAction;
 class UInputMappingContext;
+class UCameraComponent;
+class USkeletalMeshComponent;
 struct FInputActionValue;
 
 UCLASS(BlueprintType, Blueprintable)
@@ -21,6 +24,7 @@ class FPSJANGGI_API AYJHArenaCombatantBase : public ACharacter
 public:
 	AYJHArenaCombatantBase();
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UFUNCTION(BlueprintCallable, Category = "YJH|Movement")
 	void MoveForward(float Value);
@@ -36,6 +40,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "YJH|Movement")
 	void SetWalkSpeed(float NewWalkSpeed);
+
+	UFUNCTION(BlueprintCallable, Category = "YJH|Movement")
+	void SetScaleStats(float InVisualScale, float InHitboxScale);
+
+	UFUNCTION(BlueprintCallable, Category = "YJH|Movement")
+	void ApplyScaleStats();
 
 	UFUNCTION(BlueprintCallable, Category = "YJH|Movement")
 	void SetMovementEnabled(bool bEnabled);
@@ -61,6 +71,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "YJH|Combat")
 	FName GetCombatantId() const { return CombatantId; }
 
+	UFUNCTION(BlueprintPure, Category = "YJH|Combat")
+	FName GetCombatSessionId() const { return CombatSessionId; }
+
+	UFUNCTION(BlueprintPure, Category = "YJH|Combat")
+	bool IsCombatEnabled() const { return bCombatEnabled; }
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|Identity")
 	FName CombatantId = NAME_None;
 
@@ -75,6 +91,24 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|Movement", meta = (ClampMin = "0.0"))
 	float BaseWalkSpeed = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|View|FirstPerson")
+	bool bEnableFirstPersonPresentation = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|View|FirstPerson")
+	bool bHideThirdPersonMeshForOwner = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|View|FirstPerson")
+	FVector FirstPersonCameraOffset = FVector(0.0f, 0.0f, 64.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|View|FirstPerson", meta = (ClampMin = "60.0", ClampMax = "120.0"))
+	float FirstPersonFieldOfView = 95.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_VisualScale, Category = "YJH|Movement", meta = (ClampMin = "0.2", ClampMax = "3.0"))
+	float VisualScale = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing = OnRep_HitboxScale, Category = "YJH|Movement", meta = (ClampMin = "0.2", ClampMax = "3.0"))
+	float HitboxScale = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|Movement", meta = (ClampMin = "0.0"))
 	float TurnRateScale = 1.0f;
@@ -96,6 +130,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "YJH|Combat", meta = (ClampMin = "1.0"))
 	float MaxHP = 100.0f;
+
+	/** Optional convenience override exposed on Pawn details. If set, copied into CombatComponent->SkillDataAsset at runtime. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Combat|Setup")
+	TObjectPtr<UYJHSkillDataAsset> SkillDataAssetOverride;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Input|Enhanced")
 	bool bUseEnhancedInputBindings = true;
@@ -157,6 +195,12 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YJH|Components")
 	TObjectPtr<UYJHArenaCombatComponent> CombatComponent;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YJH|Components")
+	TObjectPtr<UCameraComponent> FirstPersonCameraComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "YJH|Components")
+	TObjectPtr<USkeletalMeshComponent> FirstPersonArmsMesh;
+
 	UFUNCTION(BlueprintImplementableEvent, Category = "YJH|Visual")
 	void OnDamagedVisualOnly(float DamageAmount);
 
@@ -165,6 +209,8 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void OnRep_Controller() override;
 
 private:
 	UFUNCTION(Server, Reliable)
@@ -172,6 +218,9 @@ private:
 
 	UFUNCTION(Server, Reliable)
 	void ServerTriggerSkillBySlot(FName SlotIndex, FYJHRuntimeSkillRequestContext RuntimeContext);
+
+	UFUNCTION(Client, Reliable)
+	void ClientSyncSkillCooldownSnapshot(const TArray<float>& SlotRemainingSeconds);
 
 	void ExecutePrimaryActionServer();
 	bool CanUsePrimaryAction() const;
@@ -219,6 +268,15 @@ private:
 	UFUNCTION()
 	void HandleDead(FName InCombatSessionId, FName DeadCombatantId, FName KillerCombatantId, FName EndReason);
 
+	UFUNCTION()
+	void OnRep_VisualScale();
+
+	UFUNCTION()
+	void OnRep_HitboxScale();
+
+	void CacheScaleDefaults();
+	void RefreshFirstPersonPresentation();
+
 	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
 	FName CombatSessionId = NAME_None;
 
@@ -230,4 +288,19 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
 	double NextPrimaryActionTimeSeconds = 0.0;
+
+	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
+	bool bDeathHandledForSession = false;
+
+	UPROPERTY(VisibleAnywhere, Category = "YJH|Movement")
+	bool bScaleDefaultsCached = false;
+
+	UPROPERTY(VisibleAnywhere, Category = "YJH|Movement")
+	float DefaultCapsuleRadius = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, Category = "YJH|Movement")
+	float DefaultCapsuleHalfHeight = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, Category = "YJH|Movement")
+	FVector DefaultMeshScale = FVector::OneVector;
 };

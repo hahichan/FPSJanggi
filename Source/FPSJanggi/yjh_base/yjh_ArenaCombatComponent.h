@@ -21,6 +21,7 @@ class FPSJANGGI_API UYJHArenaCombatComponent : public UActorComponent
 
 public:
 	UYJHArenaCombatComponent();
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	UFUNCTION(BlueprintCallable, Category = "YJH|Combat")
@@ -37,6 +38,11 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "YJH|Combat")
 	float GetRemainingCooldownBySkillId(FName SkillId) const;
+
+	void ApplyClientCooldownSnapshot(const TArray<float>& SlotRemainingSeconds);
+
+	UFUNCTION(BlueprintPure, Category = "YJH|Combat")
+	FName GetCombatSessionId() const { return CombatSessionId; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Combat")
 	TObjectPtr<UYJHSkillDataAsset> SkillDataAsset;
@@ -76,10 +82,10 @@ private:
 	void ApplyWallRunPassive(const FYJHSkillDefinition& SkillSnapshot, float DeltaTime);
 	void RestoreMovementDefaults();
 
-	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
+	UPROPERTY(VisibleAnywhere, Replicated, Category = "YJH|Combat")
 	FName CombatSessionId = NAME_None;
 
-	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
+	UPROPERTY(VisibleAnywhere, Replicated, Category = "YJH|Combat")
 	FName CombatantId = NAME_None;
 
 	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
@@ -90,6 +96,9 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
 	TMap<FName, double> CooldownEndTimeBySkillId;
+
+	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
+	TMap<FName, double> ClientCooldownEndTimeBySlot;
 
 	UPROPERTY(VisibleAnywhere, Category = "YJH|Combat")
 	TArray<FYJHSkillDefinition> PassiveSkills;

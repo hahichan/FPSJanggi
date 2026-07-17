@@ -145,6 +145,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Arena")
 	FName GetActiveCombatSessionId() const { return ActiveCombatSessionId; }
 
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Arena|Integration")
+	bool IsUsingTemporaryTestArenaCombatants() const { return bUseTemporaryTestArenaCombatants; }
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena|Integration")
+	void SetUseTemporaryTestArenaCombatants(bool bEnabled);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena|Integration")
+	void SetTemporaryTestArenaCombatantClasses(TSubclassOf<APawn> BlueClass, TSubclassOf<APawn> RedClass);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena|Integration")
+	void ApplyTemporaryClassesToActiveArenaSession(TSubclassOf<APawn> BlueClass, TSubclassOf<APawn> RedClass);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena|Integration")
+	void LogArenaCombatantClassMeshState() const;
+
 	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Board")
 	FVector GetCellWorldPosition(int32 BoardIndex) const;
 

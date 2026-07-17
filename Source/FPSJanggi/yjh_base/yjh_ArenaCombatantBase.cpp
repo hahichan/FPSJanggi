@@ -2,6 +2,7 @@
 
 #include "yjh_base/yjh_ArenaCombatantBase.h"
 
+#include "Camera/CameraComponent.h"
 #include "Engine/OverlapResult.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -10,11 +11,84 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
 #include "InputActionValue.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Logging/LogMacros.h"
+#include "Net/UnrealNetwork.h"
 #include "NSH/AuthoritativeJanggiBoard.h"
 #include "Components/InputComponent.h"
 #include "Engine/LocalPlayer.h"
+#include "EngineUtils.h"
 #include "yjh_base/yjh_ArenaCombatComponent.h"
 #include "yjh_base/yjh_ArenaHealthComponent.h"
+#include "yjh_base/yjh_SkillDataAsset.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogYJHCombatant, Log, All);
+
+namespace
+{
+	UYJHSkillDataAsset* TryLoadSkillDataAsset(const TCHAR* AssetPath)
+	{
+		return Cast<UYJHSkillDataAsset>(StaticLoadObject(UYJHSkillDataAsset::StaticClass(), nullptr, AssetPath));
+	}
+
+	UYJHSkillDataAsset* ResolveFallbackSkillDataAsset(const FName PieceInstanceId, const FName CombatantId)
+	{
+		TArray<FString> CandidateNames;
+		if (!PieceInstanceId.IsNone())
+		{
+			CandidateNames.Add(PieceInstanceId.ToString());
+		}
+		if (!CombatantId.IsNone() && CombatantId != PieceInstanceId)
+		{
+			CandidateNames.Add(CombatantId.ToString());
+		}
+
+		for (const FString& Name : CandidateNames)
+		{
+			const FString Path = FString::Printf(TEXT("/Game/User/piece/%s/%s_skill.%s_skill"), *Name, *Name, *Name);
+			if (UYJHSkillDataAsset* Loaded = TryLoadSkillDataAsset(*Path))
+			{
+				return Loaded;
+			}
+		}
+
+		return nullptr;
+	}
+
+	template <typename TComponent>
+	TComponent* EnsureArenaComponent(AActor* Owner, TObjectPtr<TComponent>& ComponentPtr, const TCHAR* RuntimeName)
+	{
+		if (!Owner)
+		{
+			return nullptr;
+		}
+
+		if (ComponentPtr)
+		{
+			return ComponentPtr.Get();
+		}
+
+		if (TComponent* ExistingComponent = Owner->FindComponentByClass<TComponent>())
+		{
+			ComponentPtr = ExistingComponent;
+			return ExistingComponent;
+		}
+
+		TComponent* CreatedComponent = NewObject<TComponent>(Owner, FName(RuntimeName));
+		if (!CreatedComponent)
+		{
+			return nullptr;
+		}
+
+		Owner->AddInstanceComponent(CreatedComponent);
+		CreatedComponent->RegisterComponent();
+		ComponentPtr = CreatedComponent;
+		UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_RUNTIME_COMPONENT_RESTORED owner=%s component=%s"),
+			*GetNameSafe(Owner), *CreatedComponent->GetClass()->GetName());
+		return CreatedComponent;
+	}
+}
 
 AYJHArenaCombatantBase::AYJHArenaCombatantBase()
 {
@@ -23,6 +97,26 @@ AYJHArenaCombatantBase::AYJHArenaCombatantBase()
 
 	HealthComponent = CreateDefaultSubobject<UYJHArenaHealthComponent>(TEXT("YJH_HealthComponent"));
 	CombatComponent = CreateDefaultSubobject<UYJHArenaCombatComponent>(TEXT("YJH_CombatComponent"));
+	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("YJH_FirstPersonCamera"));
+	FirstPersonCameraComponent->SetupAttachment(GetCapsuleComponent());
+	FirstPersonCameraComponent->SetRelativeLocation(FirstPersonCameraOffset);
+	FirstPersonCameraComponent->bUsePawnControlRotation = true;
+	FirstPersonCameraComponent->FieldOfView = FirstPersonFieldOfView;
+
+	FirstPersonArmsMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("YJH_FirstPersonArms"));
+	FirstPersonArmsMesh->SetupAttachment(FirstPersonCameraComponent);
+	FirstPersonArmsMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	FirstPersonArmsMesh->SetCastShadow(false);
+	FirstPersonArmsMesh->SetOnlyOwnerSee(true);
+	FirstPersonArmsMesh->bCastDynamicShadow = false;
+	FirstPersonArmsMesh->bReceivesDecals = false;
+}
+
+void AYJHArenaCombatantBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AYJHArenaCombatantBase, VisualScale);
+	DOREPLIFETIME(AYJHArenaCombatantBase, HitboxScale);
 }
 
 void AYJHArenaCombatantBase::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -249,6 +343,28 @@ void AYJHArenaCombatantBase::SetWalkSpeed(float NewWalkSpeed)
 	}
 }
 
+void AYJHArenaCombatantBase::SetScaleStats(float InVisualScale, float InHitboxScale)
+{
+	VisualScale = FMath::Clamp(InVisualScale, 0.2f, 3.0f);
+	HitboxScale = FMath::Clamp(InHitboxScale, 0.2f, 3.0f);
+	ApplyScaleStats();
+}
+
+void AYJHArenaCombatantBase::ApplyScaleStats()
+{
+	CacheScaleDefaults();
+
+	if (USkeletalMeshComponent* MeshComponent = GetMesh())
+	{
+		MeshComponent->SetRelativeScale3D(DefaultMeshScale * VisualScale);
+	}
+
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		Capsule->SetCapsuleSize(DefaultCapsuleRadius * HitboxScale, DefaultCapsuleHalfHeight * HitboxScale, true);
+	}
+}
+
 void AYJHArenaCombatantBase::SetMovementEnabled(bool bEnabled)
 {
 	bMovementEnabled = bEnabled;
@@ -260,17 +376,18 @@ void AYJHArenaCombatantBase::SetMovementEnabled(bool bEnabled)
 
 void AYJHArenaCombatantBase::PrimaryAction()
 {
-	if (!CanUsePrimaryAction())
-	{
-		return;
-	}
-
 	if (HasAuthority())
 	{
+		if (!CanUsePrimaryAction())
+		{
+			return;
+		}
+
 		ExecutePrimaryActionServer();
 		return;
 	}
 
+	// Client-side combat/session flags can be briefly stale; server validates authoritative state.
 	ServerPrimaryAction();
 }
 
@@ -342,6 +459,29 @@ bool AYJHArenaCombatantBase::CanUsePrimaryAction() const
 void AYJHArenaCombatantBase::BeginPlay()
 {
 	Super::BeginPlay();
+	EnsureArenaComponent(this, HealthComponent, TEXT("YJH_HealthComponent_Runtime"));
+	EnsureArenaComponent(this, CombatComponent, TEXT("YJH_CombatComponent_Runtime"));
+	if (CombatComponent && SkillDataAssetOverride)
+	{
+		CombatComponent->SkillDataAsset = SkillDataAssetOverride;
+	}
+	if (CombatComponent && !CombatComponent->SkillDataAsset)
+	{
+		CombatComponent->SkillDataAsset = ResolveFallbackSkillDataAsset(PieceInstanceId, CombatantId);
+		if (!CombatComponent->SkillDataAsset)
+		{
+			UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_SKILLDATA_UNRESOLVED pawn=%s piece=%s combatant=%s"),
+				*GetNameSafe(this), *PieceInstanceId.ToString(), *CombatantId.ToString());
+		}
+	}
+	if (FirstPersonCameraComponent)
+	{
+		FirstPersonCameraComponent->SetRelativeLocation(FirstPersonCameraOffset);
+		FirstPersonCameraComponent->SetFieldOfView(FirstPersonFieldOfView);
+	}
+	RefreshFirstPersonPresentation();
+	CacheScaleDefaults();
+	ApplyScaleStats();
 
 	if (GetCharacterMovement())
 	{
@@ -350,14 +490,43 @@ void AYJHArenaCombatantBase::BeginPlay()
 
 	if (HealthComponent)
 	{
-		HealthComponent->OnDamaged.AddDynamic(this, &AYJHArenaCombatantBase::HandleDamaged);
-		HealthComponent->OnDead.AddDynamic(this, &AYJHArenaCombatantBase::HandleDead);
+		HealthComponent->OnDamaged.AddUniqueDynamic(this, &AYJHArenaCombatantBase::HandleDamaged);
+		HealthComponent->OnDead.AddUniqueDynamic(this, &AYJHArenaCombatantBase::HandleDead);
 	}
+}
+
+void AYJHArenaCombatantBase::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+	RefreshFirstPersonPresentation();
+}
+
+void AYJHArenaCombatantBase::OnRep_Controller()
+{
+	Super::OnRep_Controller();
+	RefreshFirstPersonPresentation();
 }
 
 void AYJHArenaCombatantBase::BeginCombatSession(FName InCombatSessionId)
 {
+	EnsureArenaComponent(this, HealthComponent, TEXT("YJH_HealthComponent_Runtime"));
+	EnsureArenaComponent(this, CombatComponent, TEXT("YJH_CombatComponent_Runtime"));
+	if (CombatComponent && SkillDataAssetOverride)
+	{
+		CombatComponent->SkillDataAsset = SkillDataAssetOverride;
+	}
+	if (CombatComponent && !CombatComponent->SkillDataAsset)
+	{
+		CombatComponent->SkillDataAsset = ResolveFallbackSkillDataAsset(PieceInstanceId, CombatantId);
+		if (!CombatComponent->SkillDataAsset)
+		{
+			UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_SKILLDATA_UNRESOLVED pawn=%s piece=%s combatant=%s"),
+				*GetNameSafe(this), *PieceInstanceId.ToString(), *CombatantId.ToString());
+		}
+	}
+
 	CombatSessionId = InCombatSessionId;
+	bDeathHandledForSession = false;
 	bCombatEnabled = true;
 	bMovementEnabled = true;
 	NextPrimaryActionTimeSeconds = 0.0;
@@ -365,6 +534,14 @@ void AYJHArenaCombatantBase::BeginCombatSession(FName InCombatSessionId)
 	if (HealthComponent && HasAuthority())
 	{
 		HealthComponent->InitializeHealth(MaxHP);
+	}
+
+	if (HealthComponent)
+	{
+		HealthComponent->OnDamaged.RemoveDynamic(this, &AYJHArenaCombatantBase::HandleDamaged);
+		HealthComponent->OnDead.RemoveDynamic(this, &AYJHArenaCombatantBase::HandleDead);
+		HealthComponent->OnDamaged.AddUniqueDynamic(this, &AYJHArenaCombatantBase::HandleDamaged);
+		HealthComponent->OnDead.AddUniqueDynamic(this, &AYJHArenaCombatantBase::HandleDead);
 	}
 
 	if (CombatComponent)
@@ -416,8 +593,25 @@ void AYJHArenaCombatantBase::SetCombatEnabled(FName InCombatSessionId, bool bEna
 
 FYJHSkillExecutionResult AYJHArenaCombatantBase::TriggerSkillBySlot(FName SlotIndex, FYJHRuntimeSkillRequestContext RuntimeContext)
 {
-	if (!CombatComponent || !bCombatEnabled)
+	EnsureArenaComponent(this, HealthComponent, TEXT("YJH_HealthComponent_Runtime"));
+	EnsureArenaComponent(this, CombatComponent, TEXT("YJH_CombatComponent_Runtime"));
+
+	if (HasAuthority() && !bCombatEnabled)
 	{
+		UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_SKILL_TRIGGER_BLOCKED pawn=%s slot=%s has_component=%s combat_enabled=%s session=%s"),
+			*GetNameSafe(this), *SlotIndex.ToString(), CombatComponent ? TEXT("true") : TEXT("false"), bCombatEnabled ? TEXT("true") : TEXT("false"), *CombatSessionId.ToString());
+		FYJHSkillExecutionResult Result;
+		Result.bSuccess = false;
+		Result.SkillId = NAME_None;
+		Result.SlotIndex = SlotIndex;
+		Result.FailCode = EYJHSkillFailCode::SKX_ExecutionBlocked;
+		return Result;
+	}
+
+	if (HasAuthority() && !CombatComponent)
+	{
+		UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_SKILL_TRIGGER_BLOCKED pawn=%s slot=%s has_component=false combat_enabled=true session=%s reason=NoCombatComponentOnServer"),
+			*GetNameSafe(this), *SlotIndex.ToString(), *CombatSessionId.ToString());
 		FYJHSkillExecutionResult Result;
 		Result.bSuccess = false;
 		Result.SkillId = NAME_None;
@@ -438,9 +632,20 @@ FYJHSkillExecutionResult AYJHArenaCombatantBase::TriggerSkillBySlot(FName SlotIn
 
 	if (HasAuthority())
 	{
-		return CombatComponent->RequestSkillBySlot(SlotIndex, RuntimeContext);
+		const FYJHSkillExecutionResult Result = CombatComponent->RequestSkillBySlot(SlotIndex, RuntimeContext);
+		UE_LOG(LogYJHCombatant, Display, TEXT("YJH_SKILL_TRIGGER_SERVER pawn=%s slot=%s success=%s fail=%s session=%s"),
+			*GetNameSafe(this), *SlotIndex.ToString(), Result.bSuccess ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.FailCode), *CombatSessionId.ToString());
+		return Result;
 	}
 
+	if (!bCombatEnabled || CombatSessionId.IsNone())
+	{
+		UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_SKILL_CLIENT_STATE_STALE pawn=%s slot=%s combat_enabled=%s session=%s -- sending RPC for server-side validation"),
+			*GetNameSafe(this), *SlotIndex.ToString(), bCombatEnabled ? TEXT("true") : TEXT("false"), *CombatSessionId.ToString());
+	}
+
+	UE_LOG(LogYJHCombatant, Display, TEXT("YJH_SKILL_TRIGGER_CLIENT pawn=%s slot=%s session=%s"),
+		*GetNameSafe(this), *SlotIndex.ToString(), *CombatSessionId.ToString());
 	ServerTriggerSkillBySlot(SlotIndex, RuntimeContext);
 
 	FYJHSkillExecutionResult PendingResult;
@@ -453,8 +658,13 @@ FYJHSkillExecutionResult AYJHArenaCombatantBase::TriggerSkillBySlot(FName SlotIn
 
 void AYJHArenaCombatantBase::ServerTriggerSkillBySlot_Implementation(FName SlotIndex, FYJHRuntimeSkillRequestContext RuntimeContext)
 {
+	EnsureArenaComponent(this, HealthComponent, TEXT("YJH_HealthComponent_Runtime"));
+	EnsureArenaComponent(this, CombatComponent, TEXT("YJH_CombatComponent_Runtime"));
+
 	if (!CombatComponent || !bCombatEnabled)
 	{
+		UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_SKILL_TRIGGER_SERVER_BLOCKED pawn=%s slot=%s has_component=%s combat_enabled=%s session=%s"),
+			*GetNameSafe(this), *SlotIndex.ToString(), CombatComponent ? TEXT("true") : TEXT("false"), bCombatEnabled ? TEXT("true") : TEXT("false"), *CombatSessionId.ToString());
 		return;
 	}
 
@@ -468,16 +678,50 @@ void AYJHArenaCombatantBase::ServerTriggerSkillBySlot_Implementation(FName SlotI
 		RuntimeContext.RequestedDirection = GetActorForwardVector();
 	}
 
-	CombatComponent->RequestSkillBySlot(SlotIndex, RuntimeContext);
+	const FYJHSkillExecutionResult Result = CombatComponent->RequestSkillBySlot(SlotIndex, RuntimeContext);
+	UE_LOG(LogYJHCombatant, Display, TEXT("YJH_SKILL_TRIGGER_SERVER_RPC pawn=%s slot=%s success=%s fail=%s session=%s"),
+		*GetNameSafe(this), *SlotIndex.ToString(), Result.bSuccess ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.FailCode), *CombatSessionId.ToString());
+
+	TArray<float> CooldownSnapshot;
+	const int32 SnapshotSlots = FMath::Clamp(CombatComponent->MaxSkillSlots, 1, 10);
+	CooldownSnapshot.Reserve(SnapshotSlots);
+	for (int32 SlotNumber = 1; SlotNumber <= SnapshotSlots; ++SlotNumber)
+	{
+		const FName SnapshotSlot(*FString::Printf(TEXT("Slot%d"), SlotNumber));
+		CooldownSnapshot.Add(CombatComponent->GetRemainingCooldownBySlot(SnapshotSlot));
+	}
+	ClientSyncSkillCooldownSnapshot(CooldownSnapshot);
+}
+
+void AYJHArenaCombatantBase::ClientSyncSkillCooldownSnapshot_Implementation(const TArray<float>& SlotRemainingSeconds)
+{
+	EnsureArenaComponent(this, HealthComponent, TEXT("YJH_HealthComponent_Runtime"));
+	EnsureArenaComponent(this, CombatComponent, TEXT("YJH_CombatComponent_Runtime"));
+	if (CombatComponent)
+	{
+		CombatComponent->ApplyClientCooldownSnapshot(SlotRemainingSeconds);
+	}
 }
 
 void AYJHArenaCombatantBase::HandleDamaged(FName InCombatSessionId, FName InstigatorCombatantId, float Amount)
 {
 	OnDamagedVisualOnly(Amount);
+
+	// Fail-safe: if HP reached zero but a dead callback was missed, force the same path.
+	if (HasAuthority() && HealthComponent && HealthComponent->IsDead() && !bDeathHandledForSession)
+	{
+		HandleDead(InCombatSessionId, CombatantId, InstigatorCombatantId, FName(TEXT("Eliminated")));
+	}
 }
 
 void AYJHArenaCombatantBase::HandleDead(FName InCombatSessionId, FName DeadCombatantId, FName KillerCombatantId, FName EndReason)
 {
+	if (bDeathHandledForSession)
+	{
+		return;
+	}
+	bDeathHandledForSession = true;
+
 	bCombatEnabled = false;
 	bMovementEnabled = false;
 	if (GetCharacterMovement())
@@ -487,10 +731,86 @@ void AYJHArenaCombatantBase::HandleDead(FName InCombatSessionId, FName DeadComba
 
 	if (HasAuthority())
 	{
-		if (AAuthoritativeJanggiBoard* Board = Cast<AAuthoritativeJanggiBoard>(GetOwner()))
+		AAuthoritativeJanggiBoard* Board = Cast<AAuthoritativeJanggiBoard>(GetOwner());
+		if (!Board)
+		{
+			for (TActorIterator<AAuthoritativeJanggiBoard> It(GetWorld()); It; ++It)
+			{
+				Board = *It;
+				break;
+			}
+		}
+
+		if (Board)
 		{
 			Board->ReportArenaCombatantDefeated(this);
 		}
+		else
+		{
+			UE_LOG(LogYJHCombatant, Warning, TEXT("YJH_DEATH_NO_BOARD pawn=%s owner=%s session=%s"),
+				*GetNameSafe(this), *GetNameSafe(GetOwner()), *CombatSessionId.ToString());
+		}
 	}
 	OnDeadVisualOnly();
+}
+
+void AYJHArenaCombatantBase::OnRep_VisualScale()
+{
+	ApplyScaleStats();
+}
+
+void AYJHArenaCombatantBase::OnRep_HitboxScale()
+{
+	ApplyScaleStats();
+}
+
+void AYJHArenaCombatantBase::CacheScaleDefaults()
+{
+	if (bScaleDefaultsCached)
+	{
+		return;
+	}
+
+	if (const UCapsuleComponent* Capsule = GetCapsuleComponent())
+	{
+		DefaultCapsuleRadius = Capsule->GetUnscaledCapsuleRadius();
+		DefaultCapsuleHalfHeight = Capsule->GetUnscaledCapsuleHalfHeight();
+	}
+	else
+	{
+		DefaultCapsuleRadius = 42.0f;
+		DefaultCapsuleHalfHeight = 96.0f;
+	}
+
+	if (const USkeletalMeshComponent* MeshComponent = GetMesh())
+	{
+		DefaultMeshScale = MeshComponent->GetRelativeScale3D();
+	}
+
+	bScaleDefaultsCached = true;
+}
+
+void AYJHArenaCombatantBase::RefreshFirstPersonPresentation()
+{
+	const bool bLocalOwner = IsLocallyControlled();
+	const bool bUseFirstPerson = bEnableFirstPersonPresentation && bLocalOwner;
+
+	if (FirstPersonCameraComponent)
+	{
+		FirstPersonCameraComponent->SetRelativeLocation(FirstPersonCameraOffset);
+		FirstPersonCameraComponent->SetFieldOfView(FirstPersonFieldOfView);
+		FirstPersonCameraComponent->SetActive(bUseFirstPerson);
+	}
+
+	if (USkeletalMeshComponent* ThirdPersonMesh = GetMesh())
+	{
+		ThirdPersonMesh->SetOwnerNoSee(bUseFirstPerson && bHideThirdPersonMeshForOwner);
+	}
+
+	if (FirstPersonArmsMesh)
+	{
+		FirstPersonArmsMesh->SetOnlyOwnerSee(true);
+		FirstPersonArmsMesh->SetOwnerNoSee(false);
+		FirstPersonArmsMesh->SetVisibility(bUseFirstPerson, true);
+	}
 }

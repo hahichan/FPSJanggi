@@ -66,6 +66,40 @@ enum class EYJHSkillFailCode : uint8
 	SKX_CooldownOverflowGuard
 };
 
+UENUM(BlueprintType)
+enum class EYJHSkillSlot : uint8
+{
+	None,
+	Slot1,
+	Slot2,
+	Slot3,
+	Slot4,
+	Slot5,
+	Slot6,
+	Slot7,
+	Slot8,
+	Slot9,
+	Slot10
+};
+
+inline FName YJHSkillSlotToName(EYJHSkillSlot Slot)
+{
+	switch (Slot)
+	{
+	case EYJHSkillSlot::Slot1: return FName(TEXT("Slot1"));
+	case EYJHSkillSlot::Slot2: return FName(TEXT("Slot2"));
+	case EYJHSkillSlot::Slot3: return FName(TEXT("Slot3"));
+	case EYJHSkillSlot::Slot4: return FName(TEXT("Slot4"));
+	case EYJHSkillSlot::Slot5: return FName(TEXT("Slot5"));
+	case EYJHSkillSlot::Slot6: return FName(TEXT("Slot6"));
+	case EYJHSkillSlot::Slot7: return FName(TEXT("Slot7"));
+	case EYJHSkillSlot::Slot8: return FName(TEXT("Slot8"));
+	case EYJHSkillSlot::Slot9: return FName(TEXT("Slot9"));
+	case EYJHSkillSlot::Slot10: return FName(TEXT("Slot10"));
+	default: return NAME_None;
+	}
+}
+
 USTRUCT(BlueprintType)
 struct FPSJANGGI_API FYJHSkillExecutionResult
 {
@@ -140,7 +174,10 @@ struct FPSJANGGI_API FYJHSkillDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
 	FName SkillId = NAME_None;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "!bIsPassive", EditConditionHides, DisplayName = "Input Slot"))
+	EYJHSkillSlot InputSlotEnum = EYJHSkillSlot::None;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "!bIsPassive && InputSlotEnum == EYJHSkillSlot::None", EditConditionHides, DisplayName = "Legacy InputSlot (Deprecated)", AdvancedDisplay))
 	FName InputSlot = NAME_None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
@@ -161,7 +198,7 @@ struct FPSJANGGI_API FYJHSkillDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
 	bool bIsPassive = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "bIsPassive || ExecType == EYJHSkillExecType::Passive", EditConditionHides))
 	EYJHPassiveType PassiveType = EYJHPassiveType::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
@@ -170,48 +207,48 @@ struct FPSJANGGI_API FYJHSkillDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
 	FText CooldownDisplayName;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::HitScan", EditConditionHides))
 	float HitScanRange = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::HitScan", EditConditionHides))
 	float HitScanRadius = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::HitScan", EditConditionHides))
 	float HitScanDamage = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Projectile", EditConditionHides))
 	FName ProjectileClassKey = NAME_None;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Projectile", EditConditionHides))
 	float ProjectileSpeed = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Projectile", EditConditionHides))
 	float ProjectileGravityScale = 1.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Projectile", EditConditionHides))
 	float ProjectileMassScale = 1.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Projectile", EditConditionHides))
 	float ProjectileDamage = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Dash", EditConditionHides))
 	float DashPower = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Dash", EditConditionHides))
 	bool bDashUseInputDirection = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::CooldownControl", EditConditionHides))
 	FName CooldownTargetSkillId = NAME_None;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::CooldownControl", EditConditionHides))
 	float CooldownDeltaSec = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Teleport", EditConditionHides))
 	float TeleportMaxDistance = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Teleport", EditConditionHides))
 	float TeleportSafetyRadius = 0.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "YJH|Skill", meta = (EditCondition = "ExecType == EYJHSkillExecType::Teleport", EditConditionHides))
 	int32 TeleportFallbackTries = 0;
 };

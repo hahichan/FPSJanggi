@@ -2,6 +2,7 @@
 
 #include "BoardPlayerController.h"
 
+#include "ArenaCombatStatusWidget.h"
 #include "ArenaDebugWidget.h"
 #include "BoardStatusWidget.h"
 #include "Camera/CameraActor.h"
@@ -23,6 +24,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "SessionSubsystem.h"
+#include "yjh_base/yjh_ArenaCombatantBase.h"
 
 namespace
 {
@@ -102,6 +104,7 @@ void ABoardPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(BoardCameraSetupTimerHandle);
 	GetWorldTimerManager().ClearTimer(BoardStatusRefreshTimerHandle);
 	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+	GetWorldTimerManager().ClearTimer(YJHArenaControlActivateRetryTimerHandle);
 	YJHArenaSubStateMachine.Reset();
 	HideLegalMoveMarkers();
 	for (UStaticMeshComponent* Marker : LegalMoveOuterMarkerPool)
@@ -117,6 +120,7 @@ void ABoardPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	LegalMoveOuterMaterial = nullptr;
 	LegalMoveInnerMaterial = nullptr;
 	RemoveArenaDebugWidget();
+	RemoveArenaCombatStatusWidget();
 	RemoveLobbyWidget();
 	if (LobbyCamera.IsValid() && bOwnsRuntimeLobbyCamera)
 	{
@@ -152,8 +156,15 @@ bool ABoardPlayerController::InputKey(const FInputKeyEventArgs& Params)
 		if (bFrontEndLobby) return Super::InputKey(Params);
 		if (AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard())
 		{
-			HandleBoardPointerClick(Board);
-			return true;
+			const EBoardMatchPhase Phase = Board->GetMatchPhase();
+			const bool bCanHandleBoardClick =
+				Phase == EBoardMatchPhase::BoardTurn &&
+				!YJHArenaSubStateMachine.IsArenaBattleReal();
+			if (bCanHandleBoardClick)
+			{
+				HandleBoardPointerClick(Board);
+				return true;
+			}
 		}
 	}
 	return Super::InputKey(Params);
@@ -169,6 +180,8 @@ void ABoardPlayerController::SetAssignedBoardTeam(EJanggiTeam Team)
 	if (HasAuthority())
 	{
 		AssignedBoardTeam = Team;
+		UE_LOG(LogTemp, Display, TEXT("BOARD_TEAM_ASSIGNED server_controller=%s team=%s"),
+			*GetNameSafe(this), *UEnum::GetValueAsString(AssignedBoardTeam));
 		ForceNetUpdate();
 		if (IsLocalController())
 		{
@@ -218,6 +231,17 @@ void ABoardPlayerController::RequestYJHArenaStart()
 #endif
 }
 
+void ABoardPlayerController::RequestYJHArenaStartWithClassPaths(const FString& BlueClassPath, const FString& RedClassPath)
+{
+#if !UE_BUILD_SHIPPING
+	if (!IsLocalController())
+	{
+		return;
+	}
+	ServerRequestYJHArenaStartWithClassPaths(BlueClassPath, RedClassPath);
+#endif
+}
+
 void ABoardPlayerController::ExitLobbyForLocalPreview()
 {
 #if !UE_BUILD_SHIPPING
@@ -242,6 +266,8 @@ void ABoardPlayerController::ExitLobbyForLocalPreview()
 
 void ABoardPlayerController::OnRep_AssignedBoardTeam()
 {
+	UE_LOG(LogTemp, Display, TEXT("BOARD_TEAM_ASSIGNED_REP client_controller=%s team=%s local=%s"),
+		*GetNameSafe(this), *UEnum::GetValueAsString(AssignedBoardTeam), IsLocalController() ? TEXT("true") : TEXT("false"));
 	if (IsLocalController())
 	{
 		if (!ShouldShowFrontEndLobby())
@@ -287,8 +313,11 @@ void ABoardPlayerController::ClientEndArenaTransition_Implementation(float Blend
 {
 	if (!IsLocalController()) return;
 	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+	GetWorldTimerManager().ClearTimer(YJHArenaControlActivateRetryTimerHandle);
+	YJHArenaControlActivateRetryCount = 0;
 	YJHArenaSubStateMachine.Reset();
 	RemoveArenaDebugWidget();
+	RemoveArenaCombatStatusWidget();
 	AActor* ReturnTarget = BoardCamera.IsValid() ? BoardCamera.Get() : PreviousViewTarget.Get();
 	if (IsValid(ReturnTarget))
 		SetViewTargetWithBlend(ReturnTarget, FMath::Max(0.1f, BlendSeconds), VTBlend_Cubic, 2.0f, false);
@@ -299,6 +328,10 @@ void ABoardPlayerController::ClientEndArenaTransition_Implementation(float Blend
 		ArenaCamera->SetLifeSpan(FMath::Max(0.1f, BlendSeconds) + 0.1f);
 		ArenaCamera.Reset();
 	}
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+	bShowMouseCursor = true;
 	OnArenaPresentationEnded(AssignedBoardTeam);
 	UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_CAMERA_RETURN team=%s target=%s"),
 		*UEnum::GetValueAsString(AssignedBoardTeam), IsValid(ReturnTarget) ? *ReturnTarget->GetName() : TEXT("None"));
@@ -558,6 +591,44 @@ void ABoardPlayerController::ServerRequestYJHArenaStart_Implementation()
 #endif
 }
 
+void ABoardPlayerController::ServerRequestYJHArenaStartWithClassPaths_Implementation(const FString& BlueClassPath, const FString& RedClassPath)
+{
+#if !UE_BUILD_SHIPPING
+	AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard();
+	if (!Board || Board->GetMatchPhase() != EBoardMatchPhase::ArenaBattle)
+	{
+		ClientShowBoardNotice(TEXT("YJH Arena Start is available during ArenaBattle only"), true);
+		return;
+	}
+
+	if (!BlueClassPath.IsEmpty() && !RedClassPath.IsEmpty())
+	{
+		UClass* BlueClass = StaticLoadClass(APawn::StaticClass(), nullptr, *BlueClassPath);
+		UClass* RedClass = StaticLoadClass(APawn::StaticClass(), nullptr, *RedClassPath);
+		if (!BlueClass || !RedClass)
+		{
+			ClientShowBoardNotice(TEXT("Failed to load selected piece classes"), true);
+			return;
+		}
+
+		Board->ApplyTemporaryClassesToActiveArenaSession(BlueClass, RedClass);
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("YJH_ARENA_REAL_STARTED requester=%s selected_blue=%s selected_red=%s"),
+		*UEnum::GetValueAsString(AssignedBoardTeam),
+		BlueClassPath.IsEmpty() ? TEXT("None") : *BlueClassPath,
+		RedClassPath.IsEmpty() ? TEXT("None") : *RedClassPath);
+
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (ABoardPlayerController* Controller = Cast<ABoardPlayerController>(It->Get()))
+		{
+			Controller->ClientRunYJHArenaStartStub(0.0f);
+		}
+	}
+#endif
+}
+
 void ABoardPlayerController::ClientRunYJHArenaStartStub_Implementation(float ReturnDelaySeconds)
 {
 #if !UE_BUILD_SHIPPING
@@ -569,11 +640,36 @@ void ABoardPlayerController::ClientRunYJHArenaStartStub_Implementation(float Ret
 	FString FailureReason;
 	if (!YJHArenaSubStateMachine.TryEnterArenaBattleReal(FailureReason))
 	{
-		ClientShowBoardNotice(FailureReason, true);
-		return;
+		// Network timing can deliver the start stub before the local arena transition callback.
+		// If the authoritative board is already in ArenaBattle, repair local sub-state and retry once.
+		if (AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard())
+		{
+			if (Board->GetMatchPhase() == EBoardMatchPhase::ArenaBattle)
+			{
+				YJHArenaSubStateMachine.EnterArenaBattle();
+				if (!YJHArenaSubStateMachine.TryEnterArenaBattleReal(FailureReason))
+				{
+					ClientShowBoardNotice(FailureReason, true);
+					return;
+				}
+			}
+			else
+			{
+				ClientShowBoardNotice(FailureReason, true);
+				return;
+			}
+		}
+		else
+		{
+			ClientShowBoardNotice(FailureReason, true);
+			return;
+		}
 	}
 
 	ClientShowBoardNotice(TEXT("YJH ArenaBattleReal Activated"), false);
+	HideBoardPhaseWidgetsForArenaReal();
+	YJHArenaControlActivateRetryCount = 0;
+	TryActivateArenaBattleRealControl();
 	if (ReturnDelaySeconds > 0.0f)
 	{
 		GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
@@ -587,12 +683,89 @@ void ABoardPlayerController::ClientRunYJHArenaStartStub_Implementation(float Ret
 #endif
 }
 
+void ABoardPlayerController::TryActivateArenaBattleRealControl()
+{
+#if !UE_BUILD_SHIPPING
+	if (!IsLocalController() || !GetWorld())
+	{
+		return;
+	}
+
+	APawn* ControlledPawn = GetPawn();
+	if (AYJHArenaCombatantBase* CombatantPawn = Cast<AYJHArenaCombatantBase>(ControlledPawn))
+	{
+		SetViewTargetWithBlend(CombatantPawn, 0.2f, VTBlend_Cubic, 2.0f, false);
+		FInputModeGameOnly InputMode;
+		SetInputMode(InputMode);
+		bShowMouseCursor = false;
+		RemoveArenaDebugWidget();
+		CreateArenaCombatStatusWidget();
+		RefreshArenaCombatStatusWidget();
+		GetWorldTimerManager().ClearTimer(YJHArenaControlActivateRetryTimerHandle);
+		YJHArenaControlActivateRetryCount = 0;
+		UE_LOG(LogTemp, Display, TEXT("YJH_ARENA_REAL_CONTROL_READY team=%s pawn=%s"),
+			*UEnum::GetValueAsString(AssignedBoardTeam), *GetNameSafe(CombatantPawn));
+		return;
+	}
+
+	if (YJHArenaControlActivateRetryCount >= 20)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YJH_ARENA_REAL_CONTROL_WAIT_TIMEOUT team=%s pawn=%s"),
+			*UEnum::GetValueAsString(AssignedBoardTeam), *GetNameSafe(ControlledPawn));
+		ClientShowBoardNotice(TEXT("Arena control sync delay: pawn possession not ready"), true);
+		return;
+	}
+
+	++YJHArenaControlActivateRetryCount;
+	GetWorldTimerManager().SetTimer(
+		YJHArenaControlActivateRetryTimerHandle,
+		this,
+		&ABoardPlayerController::TryActivateArenaBattleRealControl,
+		0.1f,
+		false);
+#endif
+}
+
 void ABoardPlayerController::HandleYJHArenaAutoReturn()
 {
 #if !UE_BUILD_SHIPPING
 	YJHArenaSubStateMachine.ReturnToArenaBattle();
+	RemoveArenaCombatStatusWidget();
+	CreateBoardStatusWidget();
+	ReplaceLegacyFormationWidget();
 	ClientShowBoardNotice(TEXT("Returned to ArenaBattle UI"), false);
 #endif
+}
+
+void ABoardPlayerController::HideBoardPhaseWidgetsForArenaReal()
+{
+	if (UFormationSelectionWidget* Widget = FormationSelectionWidget.Get())
+	{
+		Widget->RemoveFromParent();
+	}
+	FormationSelectionWidget.Reset();
+
+	if (UBoardStatusWidget* Widget = BoardStatusWidget.Get())
+	{
+		Widget->RemoveFromParent();
+	}
+	BoardStatusWidget.Reset();
+	RemoveArenaDebugWidget();
+	RemoveArenaCombatStatusWidget();
+
+	if (UClass* LegacyClass = LoadClass<UUserWidget>(
+		nullptr, TEXT("/Game/User/Blueprints/InterFace_MS.InterFace_MS_C")))
+	{
+		TArray<UUserWidget*> LegacyWidgets;
+		UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, LegacyWidgets, LegacyClass, false);
+		for (UUserWidget* Widget : LegacyWidgets)
+		{
+			if (Widget)
+			{
+				Widget->RemoveFromParent();
+			}
+		}
+	}
 }
 
 void ABoardPlayerController::ServerRequestReturnToLobby_Implementation()
@@ -712,6 +885,37 @@ void ABoardPlayerController::RemoveArenaDebugWidget()
 	ArenaDebugWidget.Reset();
 }
 
+void ABoardPlayerController::CreateArenaCombatStatusWidget()
+{
+	if (!IsLocalController() || ArenaCombatStatusWidget.IsValid())
+	{
+		return;
+	}
+
+	if (UArenaCombatStatusWidget* Widget = CreateWidget<UArenaCombatStatusWidget>(this, UArenaCombatStatusWidget::StaticClass()))
+	{
+		ArenaCombatStatusWidget = Widget;
+		Widget->AddToViewport(1100);
+	}
+}
+
+void ABoardPlayerController::RemoveArenaCombatStatusWidget()
+{
+	if (UArenaCombatStatusWidget* Widget = ArenaCombatStatusWidget.Get())
+	{
+		Widget->RemoveFromParent();
+	}
+	ArenaCombatStatusWidget.Reset();
+}
+
+void ABoardPlayerController::RefreshArenaCombatStatusWidget()
+{
+	if (UArenaCombatStatusWidget* Widget = ArenaCombatStatusWidget.Get())
+	{
+		Widget->UpdateFromCombatant(Cast<AYJHArenaCombatantBase>(GetPawn()));
+	}
+}
+
 void ABoardPlayerController::CreateBoardStatusWidget()
 {
 	if (!IsLocalController() || bFrontEndLobby || BoardStatusWidget.IsValid())
@@ -734,9 +938,27 @@ void ABoardPlayerController::RefreshBoardStatus()
 	{
 		return;
 	}
+
+	if (YJHArenaSubStateMachine.IsArenaBattleReal())
+	{
+		HideBoardPhaseWidgetsForArenaReal();
+		CreateArenaCombatStatusWidget();
+		RefreshArenaCombatStatusWidget();
+		return;
+	}
+
+	RemoveArenaCombatStatusWidget();
+
 	if (const AAuthoritativeJanggiBoard* Board = FindAuthoritativeBoard())
 	{
 		const EBoardMatchPhase Phase = Board->GetMatchPhase();
+		if (Phase == EBoardMatchPhase::BoardTurn &&
+			(AssignedBoardTeam == EJanggiTeam::Blue || AssignedBoardTeam == EJanggiTeam::Red) &&
+			!FormationSelectionWidget.IsValid())
+		{
+			// Late-join and replication race recovery: keep trying until team UI is present.
+			ReplaceLegacyFormationWidget();
+		}
 		if ((Phase == EBoardMatchPhase::ArenaTransition || Phase == EBoardMatchPhase::ArenaBattle ||
 			Phase == EBoardMatchPhase::BattleResolution) && !ArenaDebugWidget.IsValid())
 		{
