@@ -60,8 +60,6 @@
 - 기본 스탯은 최소 필드만 고정하고, 실제 밸런스용 세부 스탯은 DataAsset로 확장
 - Runtime 상태는 복제 대상과 로컬 전용 상태를 분리
 - 예시 Runtime 필드: CurrentHP, CharacterState, bDeathReported, LastDamageServerTime
-- 스탯 관련 수치는 타 개발자가 DataAsset/Blueprint에서 언제든 수정 가능해야 한다.
-- 코드 재컴파일 없이 밸런스 수정 가능한 노출(EditDefaultsOnly/BlueprintReadWrite)을 기본 원칙으로 한다.
 
 기본 스탯 v0 (확정)
 - MaxHP
@@ -123,10 +121,6 @@ Base/Runtime 스탯 필드표 (초안)
 초기 구현 범위(v2)
 - 시작 시점부터 Slot1..Slot10 전부를 베이스 캐릭터 표준 슬롯으로 노출한다.
 - 슬롯은 비어 있을 수 있으나, 슬롯 컨테이너/입력 경로/쿨타임 조회 경로는 10개 기준으로 항상 유지한다.
-
-슬롯 가변성 정책
-- 기본값은 10이지만 MaxSkillSlots 설정값으로 확장 가능해야 한다.
-- 향후 슬롯 수 증가 시 코드 하드코딩 수정이 아니라 설정값 변경으로 대응한다.
 
 ## 6-4. 카메라/비주얼 설계 가이드
 - 기본 전투 카메라 슬롯(상대 확인 가능 시야) 제공

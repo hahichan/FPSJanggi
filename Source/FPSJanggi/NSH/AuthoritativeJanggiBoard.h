@@ -107,6 +107,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena")
 	void ResolveArenaBattle(EJanggiTeam WinnerTeam);
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "FPS Janggi|Arena")
+	void AbortArenaBattleForced(const FString& Reason);
+
 	/**
 	 * Server-side integration point for a combat character's health/death system.
 	 * Passing either active arena combatant resolves the battle for the other team.
@@ -138,6 +141,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Arena")
 	FBoardBattleContext GetBattleContext() const { return BattleContext; }
+
+	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Arena")
+	FName GetActiveCombatSessionId() const { return ActiveCombatSessionId; }
 
 	UFUNCTION(BlueprintPure, Category = "FPS Janggi|Board")
 	FVector GetCellWorldPosition(int32 BoardIndex) const;
@@ -182,7 +188,11 @@ protected:
 	float ArenaTransitionSeconds = 1.25f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "FPS Janggi|Arena", meta = (ClampMin = "5.0"))
-	float ArenaBattleTimeLimitSeconds = 120.0f;
+	float ArenaBattleTimeLimitSeconds = 60.0f;
+
+	/** Optional per-piece override for arena timeout. Value <= 0 keeps default. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "FPS Janggi|Arena")
+	TMap<EJanggiPieceType, float> PieceArenaTimeoutOverrideSeconds;
 
 	/** Exact fixed actor scale used by origin/master's JanggiBoard1 spawn transforms. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "FPS Janggi|Board", meta = (ClampMin = "0.01"))
@@ -211,6 +221,14 @@ protected:
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Placement", meta = (MakeEditWidget = true))
 	FVector ArenaRedSpawnOffset = FVector(650.0, 1800.0, 200.0);
 
+	/** Enable random spawn selection from map actors tagged with ArenaSpawnPointTag. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Placement")
+	bool bUseTaggedArenaSpawnPoints = true;
+
+	/** Tag to place on arena spawn-point actors in the map. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Placement")
+	FName ArenaSpawnPointTag = FName(TEXT("YJH_ArenaSpawn"));
+
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Placement", meta = (MakeEditWidget = true))
 	FVector ArenaBlueCameraOffset = FVector(-1070.0, 1800.0, 390.0);
 
@@ -232,6 +250,16 @@ protected:
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Integration")
 	TMap<EJanggiPieceType, TSubclassOf<APawn>> RedArenaCombatantClasses;
+
+	/** Temporary hook: force Blue=test_a, Red=test_b for quick arena iteration. */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Integration|Temporary")
+	bool bUseTemporaryTestArenaCombatants = true;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Integration|Temporary")
+	TSubclassOf<APawn> TemporaryBlueCombatantClass;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "FPS Janggi|Arena|Integration|Temporary")
+	TSubclassOf<APawn> TemporaryRedCombatantClass;
 
 	UPROPERTY(ReplicatedUsing = OnRep_ClickHistory)
 	TArray<FVector_NetQuantize10> ClickHistory;
@@ -274,6 +302,7 @@ private:
 	FTimerHandle TurnTimerHandle;
 	FTimerHandle ArenaTransitionTimerHandle;
 	FTimerHandle ArenaBattleTimerHandle;
+	FTimerHandle ArenaPendingDefeatFinalizeTimerHandle;
 	FTimerHandle PieceSynchronizationTimerHandle;
 	FTimerHandle PieceVisualSynchronizationTimerHandle;
 	UPROPERTY(Replicated)
@@ -282,6 +311,12 @@ private:
 	TObjectPtr<AActor> ArenaRedCombatant = nullptr;
 	int32 PieceVisualSynchronizationAttempts = 0;
 	bool bDestroyingArenaCombatants = false;
+	bool bArenaFinalizeRequested = false;
+	FName ActiveCombatSessionId = NAME_None;
+	TSet<EJanggiTeam> PendingDefeatedTeams;
+	bool bArenaSpawnPairResolved = false;
+	FVector ArenaBlueSpawnWorldLocation = FVector::ZeroVector;
+	FVector ArenaRedSpawnWorldLocation = FVector::ZeroVector;
 
 	bool IsValidBoardLocalPosition(const FVector& LocalPosition) const;
 	int32 GetBoardIndex(const FVector& SanitizedLocalPosition) const;
@@ -312,15 +347,20 @@ private:
 	void StartArenaBattle(int32 DestinationIndex);
 	void EnterArenaBattlePhase();
 	void HandleArenaBattleExpired();
+	void FinalizeArenaPendingDefeats();
 	void NotifyArenaCamera(bool bEnteringArena);
+	void PrepareArenaSpawnPair();
 	FVector GetArenaCenterWorldLocation() const;
 	FVector GetArenaFighterWorldLocation(EJanggiTeam Team) const;
 	FVector GetArenaCameraWorldLocation(EJanggiTeam Team) const;
 	FVector GetArenaCameraFocusWorldLocation() const;
 	void SpawnArenaCombatants();
+	AActor* SpawnTemporaryArenaCombatant(EJanggiTeam Team, TSubclassOf<APawn> CombatantClass);
 	AActor* SpawnArenaCombatant(EJanggiTeam Team, EJanggiPieceType Type);
 	void PossessArenaCombatant(EJanggiTeam Team, AActor* Combatant);
 	void DestroyArenaCombatants();
+	float GetActiveArenaTimeoutSeconds() const;
+	FName BuildCombatSessionId() const;
 	UFUNCTION()
 	void HandleArenaCombatantDestroyed(AActor* DestroyedActor);
 	bool FindFirstLegalNonCaptureMove(EJanggiTeam Team, int32& OutFromIndex, int32& OutToIndex) const;

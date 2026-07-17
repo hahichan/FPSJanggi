@@ -552,7 +552,7 @@ void ABoardPlayerController::ServerRequestYJHArenaStart_Implementation()
 	{
 		if (ABoardPlayerController* Controller = Cast<ABoardPlayerController>(It->Get()))
 		{
-			Controller->ClientRunYJHArenaStartStub(1.0f);
+			Controller->ClientRunYJHArenaStartStub(0.0f);
 		}
 	}
 #endif
@@ -573,14 +573,17 @@ void ABoardPlayerController::ClientRunYJHArenaStartStub_Implementation(float Ret
 		return;
 	}
 
-	ClientShowBoardNotice(TEXT("YJH Arena Mode Entered (Stub)"), false);
-	GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
-	GetWorldTimerManager().SetTimer(
-		YJHArenaAutoReturnTimerHandle,
-		this,
-		&ABoardPlayerController::HandleYJHArenaAutoReturn,
-		FMath::Max(0.1f, ReturnDelaySeconds),
-		false);
+	ClientShowBoardNotice(TEXT("YJH ArenaBattleReal Activated"), false);
+	if (ReturnDelaySeconds > 0.0f)
+	{
+		GetWorldTimerManager().ClearTimer(YJHArenaAutoReturnTimerHandle);
+		GetWorldTimerManager().SetTimer(
+			YJHArenaAutoReturnTimerHandle,
+			this,
+			&ABoardPlayerController::HandleYJHArenaAutoReturn,
+			ReturnDelaySeconds,
+			false);
+	}
 #endif
 }
 

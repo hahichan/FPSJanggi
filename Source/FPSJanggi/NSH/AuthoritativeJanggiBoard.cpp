@@ -6,6 +6,11 @@
 #include "BoardPlayerController.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "yjh_base/yjh_ArenaCombatantBase.h"
+#include "yjh_base/yjh_ArenaCombatantTestA.h"
+#include "yjh_base/yjh_ArenaCombatantTestB.h"
+#include "yjh_base/yjh_ArenaCombatantTemplate_Blue.h"
+#include "yjh_base/yjh_ArenaCombatantTemplate_Red.h"
 #include "Engine/World.h"
 #include "Engine/SkeletalMesh.h"
 #include "GameFramework/Pawn.h"
@@ -106,6 +111,37 @@ AAuthoritativeJanggiBoard::AAuthoritativeJanggiBoard()
 	bAlwaysRelevant = true;
 	bNetLoadOnClient = true;
 	NetDormancy = DORM_Awake;
+
+	if (BlueArenaCombatantClasses.Num() == 0)
+	{
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::Soldier, AYJHArenaCombatantTemplate_Blue::StaticClass());
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::Cannon, AYJHArenaCombatantTemplate_Blue::StaticClass());
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::Chariot, AYJHArenaCombatantTemplate_Blue::StaticClass());
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::Elephant, AYJHArenaCombatantTemplate_Blue::StaticClass());
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::General, AYJHArenaCombatantTemplate_Blue::StaticClass());
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::Guard, AYJHArenaCombatantTemplate_Blue::StaticClass());
+		BlueArenaCombatantClasses.Add(EJanggiPieceType::Horse, AYJHArenaCombatantTemplate_Blue::StaticClass());
+	}
+
+	if (RedArenaCombatantClasses.Num() == 0)
+	{
+		RedArenaCombatantClasses.Add(EJanggiPieceType::Soldier, AYJHArenaCombatantTemplate_Red::StaticClass());
+		RedArenaCombatantClasses.Add(EJanggiPieceType::Cannon, AYJHArenaCombatantTemplate_Red::StaticClass());
+		RedArenaCombatantClasses.Add(EJanggiPieceType::Chariot, AYJHArenaCombatantTemplate_Red::StaticClass());
+		RedArenaCombatantClasses.Add(EJanggiPieceType::Elephant, AYJHArenaCombatantTemplate_Red::StaticClass());
+		RedArenaCombatantClasses.Add(EJanggiPieceType::General, AYJHArenaCombatantTemplate_Red::StaticClass());
+		RedArenaCombatantClasses.Add(EJanggiPieceType::Guard, AYJHArenaCombatantTemplate_Red::StaticClass());
+		RedArenaCombatantClasses.Add(EJanggiPieceType::Horse, AYJHArenaCombatantTemplate_Red::StaticClass());
+	}
+
+	if (!TemporaryBlueCombatantClass)
+	{
+		TemporaryBlueCombatantClass = AYJHArenaCombatantTestA::StaticClass();
+	}
+	if (!TemporaryRedCombatantClass)
+	{
+		TemporaryRedCombatantClass = AYJHArenaCombatantTestB::StaticClass();
+	}
 }
 
 void AAuthoritativeJanggiBoard::BeginPlay()
@@ -590,18 +626,41 @@ void AAuthoritativeJanggiBoard::ResolveArenaBattle(EJanggiTeam WinnerTeam)
 		return;
 	}
 
+	if (bArenaFinalizeRequested)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YJH_DBG_FINALIZE_ONCE skipped=already_finalized session=%s"), *ActiveCombatSessionId.ToString());
+		return;
+	}
+	bArenaFinalizeRequested = true;
+
 	GetWorldTimerManager().ClearTimer(ArenaTransitionTimerHandle);
 	GetWorldTimerManager().ClearTimer(ArenaBattleTimerHandle);
+	GetWorldTimerManager().ClearTimer(ArenaPendingDefeatFinalizeTimerHandle);
 	MatchPhase = EBoardMatchPhase::BattleResolution;
-	UE_LOG(LogTemp, Display, TEXT("BOARD_BATTLE_RESOLVED winner=%s"), *UEnum::GetValueAsString(WinnerTeam));
+	UE_LOG(LogTemp, Display, TEXT("BOARD_BATTLE_RESOLVED winner=%s session=%s"),
+		*UEnum::GetValueAsString(WinnerTeam), *ActiveCombatSessionId.ToString());
 	const FBoardBattleContext ResolvedContext = BattleContext;
 	OnArenaBattleResolved(ResolvedContext, WinnerTeam);
-	const bool bAttackerWon = WinnerTeam == ResolvedContext.AttackerTeam;
-	const bool bGeneralDefeated =
+	const bool bDraw = WinnerTeam == EJanggiTeam::Unassigned;
+	const bool bAttackerWon = !bDraw && WinnerTeam == ResolvedContext.AttackerTeam;
+	const bool bGeneralDefeated = !bDraw && (
 		(bAttackerWon && ResolvedContext.DefenderType == EJanggiPieceType::General) ||
-		(!bAttackerWon && ResolvedContext.AttackerType == EJanggiPieceType::General);
+		(!bAttackerWon && ResolvedContext.AttackerType == EJanggiPieceType::General));
 
-	if (bAttackerWon)
+	if (bDraw)
+	{
+		const bool bDefenderRemoved = RemoveBoardPieceAt(ResolvedContext.DestinationIndex);
+		const bool bAttackerRemoved = RemoveBoardPieceAt(ResolvedContext.OriginIndex);
+		ClickHistory.Add(FVector_NetQuantize10(GetCellLocalPosition(ResolvedContext.OriginIndex)));
+		ClickHistory.Add(FVector_NetQuantize10(GetCellLocalPosition(ResolvedContext.DestinationIndex)));
+		SelectedIndex = INDEX_NONE;
+		ClearLegalMoveMarkersForAllPlayers();
+		UE_LOG(LogTemp, Display, TEXT("YJH_DBG_FINALIZE_ONCE result=Draw remove_policy=BothEliminated attacker_removed=%s defender_removed=%s session=%s"),
+			bAttackerRemoved ? TEXT("true") : TEXT("false"),
+			bDefenderRemoved ? TEXT("true") : TEXT("false"),
+			*ActiveCombatSessionId.ToString());
+	}
+	else if (bAttackerWon)
 	{
 		CompleteBoardMove(ResolvedContext.DestinationIndex);
 	}
@@ -616,11 +675,22 @@ void AAuthoritativeJanggiBoard::ResolveArenaBattle(EJanggiTeam WinnerTeam)
 			bAttackerRemoved ? TEXT("true") : TEXT("false"));
 	}
 
+	if (AYJHArenaCombatantBase* BlueCombatant = Cast<AYJHArenaCombatantBase>(ArenaBlueCombatant))
+	{
+		BlueCombatant->EndCombatSession(ActiveCombatSessionId, bDraw ? FName(TEXT("Draw")) : FName(TEXT("Resolved")));
+	}
+	if (AYJHArenaCombatantBase* RedCombatant = Cast<AYJHArenaCombatantBase>(ArenaRedCombatant))
+	{
+		RedCombatant->EndCombatSession(ActiveCombatSessionId, bDraw ? FName(TEXT("Draw")) : FName(TEXT("Resolved")));
+	}
+
 	DestroyArenaCombatants();
 	// Unpossess/destroy first, then make the explicit board camera RPC the final
 	// local view operation. This prevents Pawn teardown from stealing the view.
 	NotifyArenaCamera(false);
 	BattleContext = FBoardBattleContext();
+	PendingDefeatedTeams.Reset();
+	ActiveCombatSessionId = NAME_None;
 	if (bGeneralDefeated)
 	{
 		FinishMatch(WinnerTeam);
@@ -630,7 +700,21 @@ void AAuthoritativeJanggiBoard::ResolveArenaBattle(EJanggiTeam WinnerTeam)
 		bBoardInputPaused = false;
 		StartTurn(CurrentTurnTeam == EJanggiTeam::Blue ? EJanggiTeam::Red : EJanggiTeam::Blue);
 	}
+	bArenaFinalizeRequested = false;
 	ForceNetUpdate();
+}
+
+void AAuthoritativeJanggiBoard::AbortArenaBattleForced(const FString& Reason)
+{
+	if (!HasAuthority() || !BattleContext.bActive ||
+		(MatchPhase != EBoardMatchPhase::ArenaBattle && MatchPhase != EBoardMatchPhase::ArenaTransition))
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("YJH_DBG_FINALIZE_ONCE reason=ForcedAbort detail=%s session=%s"),
+		*Reason, *ActiveCombatSessionId.ToString());
+	ResolveArenaBattle(EJanggiTeam::Unassigned);
 }
 
 void AAuthoritativeJanggiBoard::ReportArenaCombatantDefeated(AActor* DefeatedCombatant)
@@ -653,12 +737,19 @@ void AAuthoritativeJanggiBoard::ReportArenaCombatantDefeated(AActor* DefeatedCom
 		return;
 	}
 
-	const EJanggiTeam WinnerTeam = DefeatedTeam == EJanggiTeam::Blue
-		? EJanggiTeam::Red : EJanggiTeam::Blue;
-	UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_DEFEAT_REPORTED defeated=%s winner=%s actor=%s"),
-		*UEnum::GetValueAsString(DefeatedTeam), *UEnum::GetValueAsString(WinnerTeam),
-		*GetNameSafe(DefeatedCombatant));
-	ResolveArenaBattle(WinnerTeam);
+	PendingDefeatedTeams.Add(DefeatedTeam);
+	UE_LOG(LogTemp, Display, TEXT("YJH_DBG_DEATH_REPORT defeated=%s actor=%s session=%s pending_count=%d"),
+		*UEnum::GetValueAsString(DefeatedTeam), *GetNameSafe(DefeatedCombatant), *ActiveCombatSessionId.ToString(), PendingDefeatedTeams.Num());
+
+	if (!GetWorldTimerManager().IsTimerActive(ArenaPendingDefeatFinalizeTimerHandle))
+	{
+		GetWorldTimerManager().SetTimer(
+			ArenaPendingDefeatFinalizeTimerHandle,
+			this,
+			&AAuthoritativeJanggiBoard::FinalizeArenaPendingDefeats,
+			0.0f,
+			false);
+	}
 }
 
 AActor* AAuthoritativeJanggiBoard::GetArenaCombatant(EJanggiTeam Team) const
@@ -1267,10 +1358,23 @@ void AAuthoritativeJanggiBoard::StartArenaBattle(int32 DestinationIndex)
 	BattleContext.DefenderType = GetPieceType(Defender);
 	BattleContext.Attacker = Attacker;
 	BattleContext.Defender = Defender;
+	bArenaFinalizeRequested = false;
+	PendingDefeatedTeams.Reset();
+	ActiveCombatSessionId = BuildCombatSessionId();
 	SpawnArenaCombatants();
+	if (AYJHArenaCombatantBase* BlueCombatant = Cast<AYJHArenaCombatantBase>(ArenaBlueCombatant))
+	{
+		BlueCombatant->BeginCombatSession(ActiveCombatSessionId);
+		BlueCombatant->SetCombatEnabled(ActiveCombatSessionId, false);
+	}
+	if (AYJHArenaCombatantBase* RedCombatant = Cast<AYJHArenaCombatantBase>(ArenaRedCombatant))
+	{
+		RedCombatant->BeginCombatSession(ActiveCombatSessionId);
+		RedCombatant->SetCombatEnabled(ActiveCombatSessionId, false);
+	}
 	OnArenaBattleStarted(BattleContext);
-	UE_LOG(LogTemp, Display, TEXT("BOARD_BATTLE_STARTED attacker=%s from=%d to=%d"),
-		*UEnum::GetValueAsString(BattleContext.AttackerTeam), BattleContext.OriginIndex, BattleContext.DestinationIndex);
+	UE_LOG(LogTemp, Display, TEXT("YJH_DBG_SESSION_BEGIN session=%s attacker=%s from=%d to=%d"),
+		*ActiveCombatSessionId.ToString(), *UEnum::GetValueAsString(BattleContext.AttackerTeam), BattleContext.OriginIndex, BattleContext.DestinationIndex);
 	NotifyArenaCamera(true);
 	GetWorldTimerManager().SetTimer(ArenaTransitionTimerHandle, this, &AAuthoritativeJanggiBoard::EnterArenaBattlePhase, ArenaTransitionSeconds, false);
 	ForceNetUpdate();
@@ -1280,14 +1384,54 @@ void AAuthoritativeJanggiBoard::EnterArenaBattlePhase()
 {
 	if (!HasAuthority() || !BattleContext.bActive) return;
 	MatchPhase = EBoardMatchPhase::ArenaBattle;
-	GetWorldTimerManager().SetTimer(ArenaBattleTimerHandle, this, &AAuthoritativeJanggiBoard::HandleArenaBattleExpired, ArenaBattleTimeLimitSeconds, false);
+	const float TimeoutSeconds = GetActiveArenaTimeoutSeconds();
+	if (AYJHArenaCombatantBase* BlueCombatant = Cast<AYJHArenaCombatantBase>(ArenaBlueCombatant))
+	{
+		BlueCombatant->SetCombatEnabled(ActiveCombatSessionId, true);
+	}
+	if (AYJHArenaCombatantBase* RedCombatant = Cast<AYJHArenaCombatantBase>(ArenaRedCombatant))
+	{
+		RedCombatant->SetCombatEnabled(ActiveCombatSessionId, true);
+	}
+	GetWorldTimerManager().SetTimer(ArenaBattleTimerHandle, this, &AAuthoritativeJanggiBoard::HandleArenaBattleExpired, TimeoutSeconds, false);
 	ForceNetUpdate();
 }
 
 void AAuthoritativeJanggiBoard::HandleArenaBattleExpired()
 {
-	const EJanggiTeam DefenderTeam = BattleContext.AttackerTeam == EJanggiTeam::Blue ? EJanggiTeam::Red : EJanggiTeam::Blue;
-	ResolveArenaBattle(DefenderTeam);
+	UE_LOG(LogTemp, Display, TEXT("YJH_DBG_FINALIZE_ONCE reason=Timeout result=Draw session=%s"), *ActiveCombatSessionId.ToString());
+	ResolveArenaBattle(EJanggiTeam::Unassigned);
+}
+
+void AAuthoritativeJanggiBoard::FinalizeArenaPendingDefeats()
+{
+	GetWorldTimerManager().ClearTimer(ArenaPendingDefeatFinalizeTimerHandle);
+
+	if (!HasAuthority() || !BattleContext.bActive ||
+		(MatchPhase != EBoardMatchPhase::ArenaBattle && MatchPhase != EBoardMatchPhase::ArenaTransition))
+	{
+		PendingDefeatedTeams.Reset();
+		return;
+	}
+
+	if (PendingDefeatedTeams.Contains(EJanggiTeam::Blue) && PendingDefeatedTeams.Contains(EJanggiTeam::Red))
+	{
+		UE_LOG(LogTemp, Display, TEXT("YJH_DBG_FINALIZE_ONCE reason=SameTickDamageBatch result=Draw session=%s"), *ActiveCombatSessionId.ToString());
+		ResolveArenaBattle(EJanggiTeam::Unassigned);
+		return;
+	}
+
+	if (PendingDefeatedTeams.Contains(EJanggiTeam::Blue))
+	{
+		ResolveArenaBattle(EJanggiTeam::Red);
+		return;
+	}
+
+	if (PendingDefeatedTeams.Contains(EJanggiTeam::Red))
+	{
+		ResolveArenaBattle(EJanggiTeam::Blue);
+		return;
+	}
 }
 
 void AAuthoritativeJanggiBoard::NotifyArenaCamera(bool bEnteringArena)
@@ -1320,8 +1464,83 @@ FVector AAuthoritativeJanggiBoard::GetArenaCenterWorldLocation() const
 
 FVector AAuthoritativeJanggiBoard::GetArenaFighterWorldLocation(EJanggiTeam Team) const
 {
+	if (bArenaSpawnPairResolved)
+	{
+		return Team == EJanggiTeam::Red ? ArenaRedSpawnWorldLocation : ArenaBlueSpawnWorldLocation;
+	}
+
 	return GetActorTransform().TransformPosition(
 		Team == EJanggiTeam::Red ? ArenaRedSpawnOffset : ArenaBlueSpawnOffset);
+}
+
+void AAuthoritativeJanggiBoard::PrepareArenaSpawnPair()
+{
+	bArenaSpawnPairResolved = false;
+	ArenaBlueSpawnWorldLocation = GetActorTransform().TransformPosition(ArenaBlueSpawnOffset);
+	ArenaRedSpawnWorldLocation = GetActorTransform().TransformPosition(ArenaRedSpawnOffset);
+
+	if (!bUseTaggedArenaSpawnPoints || ArenaSpawnPointTag.IsNone() || !GetWorld())
+	{
+		return;
+	}
+
+	TArray<AActor*> TaggedSpawnPoints;
+	UGameplayStatics::GetAllActorsWithTag(GetWorld(), ArenaSpawnPointTag, TaggedSpawnPoints);
+	if (TaggedSpawnPoints.Num() < 2)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YJH_TAG_SPAWN fallback=offset reason=insufficient_points tag=%s count=%d"),
+			*ArenaSpawnPointTag.ToString(), TaggedSpawnPoints.Num());
+		return;
+	}
+
+	const int32 BlueIndex = FMath::RandRange(0, TaggedSpawnPoints.Num() - 1);
+	int32 RedIndex = INDEX_NONE;
+	for (int32 TryCount = 0; TryCount < 32; ++TryCount)
+	{
+		const int32 Candidate = FMath::RandRange(0, TaggedSpawnPoints.Num() - 1);
+		if (Candidate == BlueIndex)
+		{
+			continue;
+		}
+
+		const FVector BlueLocation = TaggedSpawnPoints[BlueIndex]->GetActorLocation();
+		const FVector RedLocation = TaggedSpawnPoints[Candidate]->GetActorLocation();
+		if (FVector::DistSquared(BlueLocation, RedLocation) < 1.0f)
+		{
+			continue;
+		}
+
+		RedIndex = Candidate;
+		break;
+	}
+
+	if (RedIndex == INDEX_NONE)
+	{
+		for (int32 Candidate = 0; Candidate < TaggedSpawnPoints.Num(); ++Candidate)
+		{
+			if (Candidate == BlueIndex)
+			{
+				continue;
+			}
+			RedIndex = Candidate;
+			break;
+		}
+	}
+
+	if (RedIndex == INDEX_NONE)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("YJH_TAG_SPAWN fallback=offset reason=no_unique_pair tag=%s"), *ArenaSpawnPointTag.ToString());
+		return;
+	}
+
+	ArenaBlueSpawnWorldLocation = TaggedSpawnPoints[BlueIndex]->GetActorLocation();
+	ArenaRedSpawnWorldLocation = TaggedSpawnPoints[RedIndex]->GetActorLocation();
+	bArenaSpawnPairResolved = true;
+
+	UE_LOG(LogTemp, Display, TEXT("YJH_TAG_SPAWN selected tag=%s blue=%s red=%s"),
+		*ArenaSpawnPointTag.ToString(),
+		*ArenaBlueSpawnWorldLocation.ToCompactString(),
+		*ArenaRedSpawnWorldLocation.ToCompactString());
 }
 
 FVector AAuthoritativeJanggiBoard::GetArenaCameraWorldLocation(EJanggiTeam Team) const
@@ -1372,8 +1591,25 @@ void AAuthoritativeJanggiBoard::SpawnArenaCombatants()
 {
 	if (!HasAuthority() || !GetWorld() || !BattleContext.bActive) return;
 	DestroyArenaCombatants();
-	const EJanggiTeam DefenderTeam = BattleContext.AttackerTeam == EJanggiTeam::Blue
-		? EJanggiTeam::Red : EJanggiTeam::Blue;
+	PrepareArenaSpawnPair();
+
+	if (bUseTemporaryTestArenaCombatants)
+	{
+		ArenaBlueCombatant = SpawnTemporaryArenaCombatant(EJanggiTeam::Blue, TemporaryBlueCombatantClass);
+		ArenaRedCombatant = SpawnTemporaryArenaCombatant(EJanggiTeam::Red, TemporaryRedCombatantClass);
+		if (ArenaBlueCombatant && ArenaRedCombatant)
+		{
+			PossessArenaCombatant(EJanggiTeam::Blue, ArenaBlueCombatant);
+			PossessArenaCombatant(EJanggiTeam::Red, ArenaRedCombatant);
+			UE_LOG(LogTemp, Display, TEXT("YJH_TEST_SPAWN active=true blue=%s red=%s"),
+				*GetNameSafe(ArenaBlueCombatant), *GetNameSafe(ArenaRedCombatant));
+			return;
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("YJH_TEST_SPAWN fallback=piece_based reason=spawn_failed blue=%s red=%s"),
+			*GetNameSafe(ArenaBlueCombatant), *GetNameSafe(ArenaRedCombatant));
+		DestroyArenaCombatants();
+	}
 
 	if (BattleContext.AttackerTeam == EJanggiTeam::Blue)
 	{
@@ -1391,6 +1627,67 @@ void AAuthoritativeJanggiBoard::SpawnArenaCombatants()
 		*GetArenaCenterWorldLocation().ToCompactString(),
 		*GetArenaFighterWorldLocation(EJanggiTeam::Blue).ToCompactString(),
 		*GetArenaFighterWorldLocation(EJanggiTeam::Red).ToCompactString());
+}
+
+AActor* AAuthoritativeJanggiBoard::SpawnTemporaryArenaCombatant(EJanggiTeam Team, TSubclassOf<APawn> CombatantClass)
+{
+	if (!CombatantClass)
+	{
+		return nullptr;
+	}
+
+	const FVector Location = GetArenaFighterWorldLocation(Team);
+	const EJanggiTeam OpponentTeam = Team == EJanggiTeam::Blue ? EJanggiTeam::Red : EJanggiTeam::Blue;
+	const FVector OpponentLocation = GetArenaFighterWorldLocation(OpponentTeam);
+	const FTransform Transform((OpponentLocation - Location).Rotation(), Location, FVector(ArenaPlaceholderScale));
+
+	APawn* Pawn = GetWorld()->SpawnActorDeferred<APawn>(
+		CombatantClass, Transform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!Pawn)
+	{
+		return nullptr;
+	}
+
+	Pawn->SetReplicates(true);
+	Pawn->SetReplicateMovement(true);
+	Pawn->bAlwaysRelevant = true;
+	Pawn->bOnlyRelevantToOwner = false;
+	Pawn->bNetUseOwnerRelevancy = false;
+	UGameplayStatics::FinishSpawningActor(Pawn, Transform);
+	Pawn->ForceNetUpdate();
+
+	if (AYJHArenaCombatantBase* CombatantBase = Cast<AYJHArenaCombatantBase>(Pawn))
+	{
+		const bool bIsAttackerTeam = Team == BattleContext.AttackerTeam;
+		const EJanggiPieceType BoardPieceType = bIsAttackerTeam ? BattleContext.AttackerType : BattleContext.DefenderType;
+		CombatantBase->TeamInfo = Team == EJanggiTeam::Blue ? EYJHTeamInfo::Blue : EYJHTeamInfo::Red;
+		switch (BoardPieceType)
+		{
+		case EJanggiPieceType::General: CombatantBase->PieceType = EYJHPieceType::King; break;
+		case EJanggiPieceType::Chariot: CombatantBase->PieceType = EYJHPieceType::Chariot; break;
+		case EJanggiPieceType::Cannon: CombatantBase->PieceType = EYJHPieceType::Cannon; break;
+		case EJanggiPieceType::Horse: CombatantBase->PieceType = EYJHPieceType::Horse; break;
+		case EJanggiPieceType::Elephant: CombatantBase->PieceType = EYJHPieceType::Elephant; break;
+		case EJanggiPieceType::Guard: CombatantBase->PieceType = EYJHPieceType::Guard; break;
+		case EJanggiPieceType::Soldier: CombatantBase->PieceType = EYJHPieceType::Pawn; break;
+		default: CombatantBase->PieceType = EYJHPieceType::Unknown; break;
+		}
+		if (CombatantBase->CombatantId.IsNone())
+		{
+			CombatantBase->CombatantId = FName(*FString::Printf(TEXT("%s_%s"),
+				Team == EJanggiTeam::Blue ? TEXT("Blue") : TEXT("Red"),
+				*StaticEnum<EJanggiPieceType>()->GetNameStringByValue(static_cast<int64>(BoardPieceType))));
+		}
+		CombatantBase->PieceInstanceId = FName(*FString::Printf(TEXT("%s_%d_%d"),
+			Team == EJanggiTeam::Blue ? TEXT("Blue") : TEXT("Red"),
+			BattleContext.OriginIndex,
+			BattleContext.DestinationIndex));
+	}
+
+	Pawn->Tags.AddUnique(FName(TEXT("ArenaCombatant")));
+	Pawn->Tags.AddUnique(Team == EJanggiTeam::Blue ? FName(TEXT("ArenaBlue")) : FName(TEXT("ArenaRed")));
+	Pawn->OnDestroyed.AddDynamic(this, &AAuthoritativeJanggiBoard::HandleArenaCombatantDestroyed);
+	return Pawn;
 }
 
 AActor* AAuthoritativeJanggiBoard::SpawnArenaCombatant(EJanggiTeam Team, EJanggiPieceType Type)
@@ -1425,22 +1722,58 @@ AActor* AAuthoritativeJanggiBoard::SpawnArenaCombatant(EJanggiTeam Team, EJanggi
 
 	if (!Combatant)
 	{
-		const TCHAR* MeshPath = GetArenaCharacterMeshPath(Team, Type);
-		USkeletalMesh* Mesh = MeshPath ? LoadObject<USkeletalMesh>(nullptr, MeshPath) : nullptr;
-		if (!Mesh)
+		AYJHArenaCombatantBase* YJHCombatant = GetWorld()->SpawnActorDeferred<AYJHArenaCombatantBase>(
+			AYJHArenaCombatantBase::StaticClass(), Transform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		if (YJHCombatant)
 		{
-			UE_LOG(LogTemp, Error, TEXT("BOARD_ARENA_CHARACTER_MESH_FAILED team=%s type=%s"),
+			YJHCombatant->TeamInfo = Team == EJanggiTeam::Blue ? EYJHTeamInfo::Blue : EYJHTeamInfo::Red;
+			switch (Type)
+			{
+			case EJanggiPieceType::General: YJHCombatant->PieceType = EYJHPieceType::King; break;
+			case EJanggiPieceType::Chariot: YJHCombatant->PieceType = EYJHPieceType::Chariot; break;
+			case EJanggiPieceType::Cannon: YJHCombatant->PieceType = EYJHPieceType::Cannon; break;
+			case EJanggiPieceType::Horse: YJHCombatant->PieceType = EYJHPieceType::Horse; break;
+			case EJanggiPieceType::Elephant: YJHCombatant->PieceType = EYJHPieceType::Elephant; break;
+			case EJanggiPieceType::Guard: YJHCombatant->PieceType = EYJHPieceType::Guard; break;
+			case EJanggiPieceType::Soldier: YJHCombatant->PieceType = EYJHPieceType::Pawn; break;
+			default: YJHCombatant->PieceType = EYJHPieceType::Unknown; break;
+			}
+			YJHCombatant->CombatantId = FName(*FString::Printf(TEXT("%s_%s"),
+				Team == EJanggiTeam::Blue ? TEXT("Blue") : TEXT("Red"),
+				*StaticEnum<EJanggiPieceType>()->GetNameStringByValue(static_cast<int64>(Type))));
+
+			const TCHAR* MeshPath = GetArenaCharacterMeshPath(Team, Type);
+			USkeletalMesh* Mesh = MeshPath ? LoadObject<USkeletalMesh>(nullptr, MeshPath) : nullptr;
+			UGameplayStatics::FinishSpawningActor(YJHCombatant, Transform);
+			if (Mesh && YJHCombatant->GetMesh())
+			{
+				YJHCombatant->GetMesh()->SetSkeletalMesh(Mesh);
+			}
+			YJHCombatant->ForceNetUpdate();
+			Combatant = YJHCombatant;
+			UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_COMBATANT_CLASS team=%s type=%s mode=yjh_base"),
 				*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type));
-			return nullptr;
 		}
-		AArenaPlaceholderCharacter* Placeholder = GetWorld()->SpawnActorDeferred<AArenaPlaceholderCharacter>(
-			AArenaPlaceholderCharacter::StaticClass(), Transform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-		if (!Placeholder) return nullptr;
-		Placeholder->SetCharacterMesh(Mesh);
-		UGameplayStatics::FinishSpawningActor(Placeholder, Transform);
-		Combatant = Placeholder;
-		UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_COMBATANT_CLASS team=%s type=%s mode=placeholder"),
-			*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type));
+
+		if (!Combatant)
+		{
+			const TCHAR* MeshPath = GetArenaCharacterMeshPath(Team, Type);
+			USkeletalMesh* Mesh = MeshPath ? LoadObject<USkeletalMesh>(nullptr, MeshPath) : nullptr;
+			if (!Mesh)
+			{
+				UE_LOG(LogTemp, Error, TEXT("BOARD_ARENA_CHARACTER_MESH_FAILED team=%s type=%s"),
+					*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type));
+				return nullptr;
+			}
+			AArenaPlaceholderCharacter* Placeholder = GetWorld()->SpawnActorDeferred<AArenaPlaceholderCharacter>(
+				AArenaPlaceholderCharacter::StaticClass(), Transform, this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			if (!Placeholder) return nullptr;
+			Placeholder->SetCharacterMesh(Mesh);
+			UGameplayStatics::FinishSpawningActor(Placeholder, Transform);
+			Combatant = Placeholder;
+			UE_LOG(LogTemp, Display, TEXT("BOARD_ARENA_COMBATANT_CLASS team=%s type=%s mode=placeholder"),
+				*UEnum::GetValueAsString(Team), *UEnum::GetValueAsString(Type));
+		}
 	}
 
 	Combatant->Tags.AddUnique(FName(TEXT("ArenaCombatant")));
@@ -1487,7 +1820,39 @@ void AAuthoritativeJanggiBoard::DestroyArenaCombatants()
 	if (IsValid(ArenaRedCombatant)) ArenaRedCombatant->Destroy();
 	ArenaBlueCombatant = nullptr;
 	ArenaRedCombatant = nullptr;
+	PendingDefeatedTeams.Reset();
+	bArenaSpawnPairResolved = false;
 	bDestroyingArenaCombatants = false;
+}
+
+float AAuthoritativeJanggiBoard::GetActiveArenaTimeoutSeconds() const
+{
+	float TimeoutSeconds = ArenaBattleTimeLimitSeconds;
+	if (const float* AttackerOverride = PieceArenaTimeoutOverrideSeconds.Find(BattleContext.AttackerType))
+	{
+		if (*AttackerOverride > 0.0f)
+		{
+			TimeoutSeconds = *AttackerOverride;
+		}
+	}
+	if (const float* DefenderOverride = PieceArenaTimeoutOverrideSeconds.Find(BattleContext.DefenderType))
+	{
+		if (*DefenderOverride > 0.0f)
+		{
+			TimeoutSeconds = FMath::Min(TimeoutSeconds, *DefenderOverride);
+		}
+	}
+	return FMath::Max(5.0f, TimeoutSeconds);
+}
+
+FName AAuthoritativeJanggiBoard::BuildCombatSessionId() const
+{
+	const FString Session = FString::Printf(TEXT("YJH_%s_%d_%d_%.0f"),
+		*UEnum::GetValueAsString(CurrentTurnTeam),
+		BattleContext.OriginIndex,
+		BattleContext.DestinationIndex,
+		GetWorld() ? GetWorld()->GetTimeSeconds() * 1000.0 : 0.0);
+	return FName(*Session);
 }
 
 void AAuthoritativeJanggiBoard::HandleArenaCombatantDestroyed(AActor* DestroyedActor)
